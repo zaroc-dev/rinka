@@ -10,6 +10,8 @@ mod preview;
 mod project_io;
 #[cfg_attr(not(any(target_os = "linux", windows)), allow(dead_code))]
 mod protocol;
+#[cfg_attr(not(windows), allow(dead_code))]
+mod rects;
 mod thumbnail;
 
 // Wallpaper playback (`serve`). The control endpoint and restore logic are

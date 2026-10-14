@@ -8,7 +8,8 @@
 //! is created or moved or its project changes. Animated scenes are drawn from
 //! a high-resolution waitable timer at their frame rate; presents use Fifo,
 //! so drawing never outruns the display. Unlike Wayland there is no frame
-//! callback, so hidden wallpapers are not detected yet and keep animating.
+//! callback; `coverage.rs` reads the window stack instead, and monitors that
+//! other windows cover completely stop animating and keep their last frame.
 
 use std::collections::HashMap;
 use std::num::NonZeroIsize;
@@ -29,6 +30,7 @@ use crate::control::{self, Command};
 use crate::project_io::{self, ImageCache};
 use crate::protocol::{Error, ErrorCode, Reply, Request};
 
+mod coverage;
 mod desktop;
 mod monitor;
 mod timer;
@@ -184,6 +186,9 @@ struct Host {
 struct OutputSlot {
     monitor: Monitor,
     wallpaper: Option<Wallpaper>,
+    /// Other windows cover the monitor completely: animation stops and the
+    /// last frame stays.
+    covered: bool,
 }
 
 struct Wallpaper {
@@ -466,6 +471,11 @@ impl Host {
             soonest(at.saturating_duration_since(Instant::now()));
         }
         for index in 0..self.outputs.len() {
+            // A covered output keeps its due frame; it is drawn as soon as
+            // the output is uncovered.
+            if self.outputs[index].covered {
+                continue;
+            }
             let due = self.outputs[index]
                 .wallpaper
                 .as_ref()
@@ -506,6 +516,23 @@ impl Host {
                 log::info!("explorer restarted; recreating wallpaper windows");
                 self.rebuild_at = None;
                 self.rebuild();
+            }
+            Event::Coverage(coverage) => {
+                for slot in &mut self.outputs {
+                    let covered = coverage.get(&slot.monitor.name).copied().unwrap_or(false);
+                    if covered != slot.covered {
+                        log::debug!(
+                            "{} {}",
+                            slot.monitor.name,
+                            if covered {
+                                "covered; pausing"
+                            } else {
+                                "visible; resuming"
+                            }
+                        );
+                        slot.covered = covered;
+                    }
+                }
             }
             Event::Destroyed(hwnd) => {
                 for slot in &mut self.outputs {
@@ -602,6 +629,7 @@ impl Host {
                     self.outputs.push(OutputSlot {
                         monitor,
                         wallpaper: None,
+                        covered: false,
                     });
                     if let Some(dir) = self.assignments.get(&name).cloned() {
                         let index = self.outputs.len() - 1;
@@ -752,7 +780,7 @@ impl Host {
                 },
                 "fractional_scale": true,
                 "global_pointer": false,
-                "visibility_pause": false,
+                "visibility_pause": true,
             },
             "paused": self.paused,
         }))
@@ -784,6 +812,7 @@ impl Host {
                         "buffer_size": m.size(),
                         "scale": scale,
                         "presenting": w.target.is_some(),
+                        "visible": !s.covered,
                     })),
                 })
             })

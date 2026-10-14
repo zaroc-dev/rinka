@@ -21,9 +21,10 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetWindowThreadProcessId, HTTRANSPARENT, MA_NOACTIVATE, MSG, PostMessageW, PostQuitMessage,
     RegisterClassExW, RegisterWindowMessageW, SW_SHOWNOACTIVATE, SendMessageW, ShowWindow,
     TranslateMessage, WM_APP, WM_CLOSE, WM_DESTROY, WM_DISPLAYCHANGE, WM_ERASEBKGND,
-    WM_MOUSEACTIVATE, WM_NCHITTEST, WNDCLASSEXW, WNDPROC, WS_EX_TOOLWINDOW, WS_POPUP,
+    WM_MOUSEACTIVATE, WM_NCHITTEST, WM_TIMER, WNDCLASSEXW, WNDPROC, WS_EX_TOOLWINDOW, WS_POPUP,
 };
 
+use super::coverage::{self, Coverage};
 use super::desktop::Desktop;
 use super::timer::Wake;
 use super::{Hwnd, hinstance, wide};
@@ -42,6 +43,8 @@ static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
 pub enum Event {
     DisplayChanged,
     ShellRestarted,
+    /// Which monitors other windows cover completely, when that changed.
+    Coverage(Coverage),
     /// Something other than the host destroyed a wallpaper window.
     Destroyed(Hwnd),
 }
@@ -198,12 +201,14 @@ fn setup() -> anyhow::Result<Hwnd> {
             std::ptr::null(),
         )
     };
-    Hwnd::from_raw(hwnd).with_context(|| {
+    let message = Hwnd::from_raw(hwnd).with_context(|| {
         format!(
             "creating the message window: {}",
             std::io::Error::last_os_error()
         )
-    })
+    })?;
+    coverage::install(message);
+    Ok(message)
 }
 
 fn register_class(name: &str, proc: WNDPROC) -> anyhow::Result<()> {
@@ -256,14 +261,26 @@ unsafe extern "system" fn message_proc(
             unsafe { (*(lparam as *mut &mut dyn FnMut()))() };
             return 0;
         }
-        WM_DISPLAYCHANGE => push_event(Event::DisplayChanged),
+        WM_DISPLAYCHANGE => {
+            push_event(Event::DisplayChanged);
+            coverage::schedule();
+        }
+        WM_TIMER => {
+            if let Some(coverage) = coverage::on_timer(wparam) {
+                push_event(Event::Coverage(coverage));
+            }
+            return 0;
+        }
         WM_CLOSE => {
             // SAFETY: our own window, on its thread.
             unsafe { DestroyWindow(hwnd) };
             return 0;
         }
-        // SAFETY: ends this thread's message loop.
-        WM_DESTROY => unsafe { PostQuitMessage(0) },
+        WM_DESTROY => {
+            coverage::uninstall();
+            // SAFETY: ends this thread's message loop.
+            unsafe { PostQuitMessage(0) };
+        }
         m if m != 0 && m == TASKBAR_CREATED.load(Ordering::Relaxed) => {
             push_event(Event::ShellRestarted)
         }
