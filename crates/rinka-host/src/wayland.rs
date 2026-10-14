@@ -57,6 +57,7 @@ use smithay_client_toolkit::{
     },
 };
 
+use crate::clock::SceneClock;
 use crate::control::{self, Command};
 use crate::project_io::{self, ImageCache};
 use crate::protocol::{Error, ErrorCode, Reply, Request};
@@ -219,8 +220,8 @@ struct Wallpaper {
     video: Option<PathBuf>,
     /// Loaded assets of a scene project.
     scene: Option<std::sync::Arc<rinka_engine::SceneAssets>>,
-    /// When the scene started, for its clock.
-    scene_start: Instant,
+    /// The scene's clock; it stops while animation is paused.
+    scene_clock: SceneClock,
     /// The scene animates and the next frame is due at this instant.
     next_frame: Option<Instant>,
     player: Option<Player>,
@@ -367,7 +368,7 @@ impl Host {
             image: prepared.image,
             video: None,
             scene: prepared.scene,
-            scene_start: Instant::now(),
+            scene_clock: SceneClock::new(Instant::now(), self.paused),
             next_frame: None,
             player: None,
             video_texture: None,
@@ -392,12 +393,13 @@ impl Host {
             None => self.outputs[index].wallpaper = None,
             Some(prepared) => {
                 let video = prepared.video.clone();
+                let paused = self.paused;
                 if let Some(w) = &mut self.outputs[index].wallpaper {
                     w.project_dir = prepared.dir;
                     w.project = prepared.project;
                     w.image = prepared.image;
                     if prepared.scene.is_some() || w.scene.is_some() {
-                        w.scene_start = Instant::now();
+                        w.scene_clock = SceneClock::new(Instant::now(), paused);
                     }
                     w.scene = prepared.scene;
                     w.dirty = true;
@@ -541,7 +543,7 @@ impl Host {
             w.dirty = false;
         }
         let draw_start = Instant::now();
-        let time = w.scene_start.elapsed().as_secs_f64();
+        let time = w.scene_clock.time(Instant::now());
         if let Some(next) = &mut w.next_frame {
             *next = Instant::now() + Duration::from_secs_f64(1.0 / SCENE_FPS);
         }
@@ -625,6 +627,7 @@ impl Host {
     fn video_tick(&mut self, now: Instant) -> Option<Duration> {
         let mut next: Option<Duration> = None;
         let mut any = false;
+        let paused = self.paused;
         let mut soonest =
             |wait: Duration| next = Some(next.map_or(wait, |n: Duration| n.min(wait)));
         for index in 0..self.outputs.len() {
@@ -635,6 +638,11 @@ impl Host {
                 .frame_pending
                 .is_some_and(|t| now.duration_since(t) > HIDDEN_AFTER);
             if let Some(due) = w.next_frame {
+                // A paused scene keeps its last frame; `resume` restarts the
+                // timer.
+                if paused {
+                    continue;
+                }
                 // Animated scene: draw at its frame rate when the compositor
                 // is ready.
                 any = true;
@@ -737,6 +745,9 @@ impl Host {
                 for p in self.players_mut() {
                     p.pause(now);
                 }
+                for w in self.outputs.iter_mut().filter_map(|s| s.wallpaper.as_mut()) {
+                    w.scene_clock.pause(now);
+                }
                 Ok(Value::Null)
             }
             Request::Resume => {
@@ -749,6 +760,9 @@ impl Host {
                     {
                         p.resume(now);
                     }
+                }
+                for w in self.outputs.iter_mut().filter_map(|s| s.wallpaper.as_mut()) {
+                    w.scene_clock.resume(now);
                 }
                 self.ensure_video_timer();
                 Ok(Value::Null)

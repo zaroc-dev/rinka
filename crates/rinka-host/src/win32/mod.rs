@@ -26,6 +26,7 @@ use serde_json::{Value, json};
 use windows_sys::Win32::Foundation::{HINSTANCE, HWND};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 
+use crate::clock::SceneClock;
 use crate::control::{self, Command};
 use crate::project_io::{self, ImageCache};
 use crate::protocol::{Error, ErrorCode, Reply, Request};
@@ -198,8 +199,8 @@ struct Wallpaper {
     image: Option<PathBuf>,
     /// Loaded assets of a scene project.
     scene: Option<std::sync::Arc<rinka_engine::SceneAssets>>,
-    /// When the scene started, for its clock.
-    scene_start: Instant,
+    /// The scene's clock; it stops while animation is paused.
+    scene_clock: SceneClock,
     /// The scene animates and the next frame is due at this instant.
     next_frame: Option<Instant>,
     /// The project changed since the target was last updated.
@@ -269,7 +270,7 @@ impl Host {
                     project: prepared.project,
                     image: prepared.image,
                     scene: prepared.scene,
-                    scene_start: Instant::now(),
+                    scene_clock: SceneClock::new(Instant::now(), self.paused),
                     next_frame: None,
                     dirty: false,
                     shown: false,
@@ -407,7 +408,7 @@ impl Host {
             w.dirty = false;
         }
         let draw_start = Instant::now();
-        let time = w.scene_start.elapsed().as_secs_f64();
+        let time = w.scene_clock.time(Instant::now());
         if let Some(next) = &mut w.next_frame {
             *next = Instant::now() + Duration::from_secs_f64(1.0 / SCENE_FPS);
         }
@@ -471,9 +472,9 @@ impl Host {
             soonest(at.saturating_duration_since(Instant::now()));
         }
         for index in 0..self.outputs.len() {
-            // A covered output keeps its due frame; it is drawn as soon as
-            // the output is uncovered.
-            if self.outputs[index].covered {
+            // A covered output or paused animation keeps its due frame; it
+            // is drawn as soon as the output is uncovered or resumed.
+            if self.paused || self.outputs[index].covered {
                 continue;
             }
             let due = self.outputs[index]
@@ -710,13 +711,21 @@ impl Host {
                 }
                 Ok(Value::Null)
             }
-            // Only videos pause, as on Wayland; Windows has no video yet.
+            // Animation stops and the last frame stays on screen.
             Request::Pause => {
                 self.paused = true;
+                let now = Instant::now();
+                for w in self.outputs.iter_mut().filter_map(|s| s.wallpaper.as_mut()) {
+                    w.scene_clock.pause(now);
+                }
                 Ok(Value::Null)
             }
             Request::Resume => {
                 self.paused = false;
+                let now = Instant::now();
+                for w in self.outputs.iter_mut().filter_map(|s| s.wallpaper.as_mut()) {
+                    w.scene_clock.resume(now);
+                }
                 Ok(Value::Null)
             }
             Request::Seek { output, position } => {
