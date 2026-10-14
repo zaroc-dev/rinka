@@ -6,10 +6,11 @@ import { createReadStream, existsSync, renameSync, statSync, writeFileSync } fro
 import { Readable } from "node:stream";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import type { HostState, ImportResult, LibraryEntry, OutputInfo, PreviewReport, Project } from "../shared/api";
+import type { AppSettings, HostState, ImportResult, LibraryEntry, OutputInfo, PreviewReport, Project } from "../shared/api";
 import { connectOrSpawn, defaultSocketPath, findHostBinary, type HostConnection } from "./host";
 import { ConfigStore, IMPORT_EXTENSIONS, Library, type StoredEntry } from "./library";
 import { Thumbnails } from "./thumbnails";
+import { AppTray } from "./tray";
 import { Workshop } from "./workshop";
 
 const SMOKE = process.env.RINKA_SMOKE === "1";
@@ -28,6 +29,11 @@ const SMOKE = process.env.RINKA_SMOKE === "1";
   }
   app.setPath("userData", userData);
 }
+
+// One editor per data directory: launching again shows the running one,
+// which may be hidden in the tray.
+const primary = SMOKE || app.requestSingleInstanceLock();
+if (!primary) app.exit(0);
 
 protocol.registerSchemesAsPrivileged([
   { scheme: "rinka", privileges: { standard: true, secure: true, supportFetchAPI: true } },
@@ -66,6 +72,9 @@ let workshop: Workshop;
 let window: BrowserWindow | null = null;
 let host: HostConnection | null = null;
 let hostState: HostState = { state: "stopped" };
+let tray: AppTray | null = null;
+/** Set once the editor is really quitting; closing the window otherwise hides it to the tray. */
+let quitting = false;
 
 // ---- library -------------------------------------------------------------------
 
@@ -122,6 +131,15 @@ function importFiles(paths: string[]): ImportResult {
 function setHostState(state: HostState): void {
   hostState = state;
   window?.webContents.send("host:state", state);
+  tray?.update(trayState());
+}
+
+/** Stops or continues wallpaper animation; the last frame stays on screen. */
+async function setPaused(paused: boolean): Promise<HostState> {
+  if (!host || hostState.state !== "connected") throw new Error("The wallpaper host is not running.");
+  await host.request(paused ? "pause" : "resume");
+  if (hostState.state === "connected") setHostState({ ...hostState, paused });
+  return hostState;
 }
 
 interface RawOutput {
@@ -166,6 +184,7 @@ async function startHost(): Promise<HostState> {
     const caps = await conn.request<{
       gpu: { name: string; backend: string };
       presentation: { compositor: string | null };
+      paused: boolean;
     }>("capabilities");
     host = conn;
     conn.onClose(() => {
@@ -179,6 +198,7 @@ async function startHost(): Promise<HostState> {
       hostVersion: hello.host_version,
       gpu: `${caps.gpu.name} (${caps.gpu.backend})`,
       compositor: caps.presentation.compositor,
+      paused: caps.paused,
     });
     await restoreAssignments();
   } catch (e) {
@@ -254,6 +274,14 @@ function registerIpc(): void {
   });
 
   ipcMain.handle("host:state", () => hostState);
+  ipcMain.handle("host:pause", (_e, paused: boolean) => setPaused(paused));
+  ipcMain.handle("settings:get", () => appSettings());
+  ipcMain.handle("settings:set", (_e, patch: Partial<AppSettings>) => {
+    if (typeof patch.trayIcon === "boolean") config.config.trayIcon = patch.trayIcon;
+    config.save();
+    updateTray();
+    return appSettings();
+  });
   ipcMain.handle("host:start", () => startHost());
   ipcMain.handle("host:stop", async () => {
     await host?.request("shutdown").catch(() => {});
@@ -361,6 +389,12 @@ function createWindow(): void {
       sandbox: true,
     },
   });
+  window.on("close", (event) => {
+    if (tray && !quitting) {
+      event.preventDefault();
+      window?.hide();
+    }
+  });
   window.on("closed", () => (window = null));
   // Smoke runs surface renderer console output for diagnosis.
   if (SMOKE) {
@@ -372,9 +406,48 @@ function createWindow(): void {
 }
 
 /** `--import PATH...` adds images, videos or folders of them at startup. */
-function importArgs(): string[] {
-  const i = process.argv.indexOf("--import");
-  return i < 0 ? [] : process.argv.slice(i + 1).filter((a) => !a.startsWith("--"));
+function importArgs(argv = process.argv): string[] {
+  const i = argv.indexOf("--import");
+  return i < 0 ? [] : argv.slice(i + 1).filter((a) => !a.startsWith("--"));
+}
+
+function showWindow(): void {
+  if (!window) return createWindow();
+  if (window.isMinimized()) window.restore();
+  window.show();
+  window.focus();
+}
+
+// ---- tray and settings -----------------------------------------------------------
+
+function appSettings(): AppSettings {
+  return { trayIcon: config.config.trayIcon !== false };
+}
+
+function trayState() {
+  return hostState.state === "connected" ? { connected: true, paused: hostState.paused } : { connected: false, paused: false };
+}
+
+/** Shows or removes the tray icon to match the settings. */
+function updateTray(): void {
+  const want = appSettings().trayIcon && !SMOKE;
+  if (want && !tray) {
+    tray = new AppTray(
+      appIcon(),
+      {
+        open: showWindow,
+        setPaused: (paused) => void setPaused(paused).catch((e: Error) => console.warn("pause:", e.message)),
+        quit: () => {
+          quitting = true;
+          app.quit();
+        },
+      },
+      trayState(),
+    );
+  } else if (!want && tray) {
+    tray.destroy();
+    tray = null;
+  }
 }
 
 function serve(request: Request): Response | Promise<Response> {
@@ -436,7 +509,16 @@ function serveRange(file: string, range: string | null): Response {
   return new Response(Readable.toWeb(createReadStream(file, { start, end })) as ReadableStream, { status: 206, headers });
 }
 
+app.on("second-instance", (_event, argv) => {
+  const toImport = importArgs(argv);
+  if (toImport.length) importFiles(toImport);
+  showWindow();
+});
+
+app.on("before-quit", () => (quitting = true));
+
 app.whenReady().then(() => {
+  if (!primary) return;
   library = new Library(path.join(app.getPath("userData"), "projects"));
   config = new ConfigStore(path.join(app.getPath("userData"), "config.json"));
   thumbnails = new Thumbnails(path.join(app.getPath("userData"), "cache", "thumbnails"), hostBinary, libraryChanged);
@@ -461,6 +543,7 @@ app.whenReady().then(() => {
   protocol.handle("rinka", serve);
   registerIpc();
   createWindow();
+  updateTray();
   refreshThumbnails();
   if (SMOKE) setTimeout(() => app.exit(2), 60_000);
   // Wallpapers belong to the host; the editor only connects to it.

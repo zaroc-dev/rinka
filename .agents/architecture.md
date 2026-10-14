@@ -129,7 +129,9 @@ message}}`. `hello {protocol: 1}` must come first. Commands: `capabilities`,
 `outputs` (names, geometry, transform, assignment, surface and video state),
 `assign {output?, project}`, `unassign {output?}`, `reload {project}`,
 `pause`, `resume`, `seek {output?, position}`, `shutdown`. Defined in
-`crates/rinka-host/src/protocol.rs`.
+`crates/rinka-host/src/protocol.rs`. `pause` stops all animation, videos and
+scenes, and keeps the last frame; scene clocks (`clock.rs`) stand still and
+continue from there on `resume`. Assignments made while paused start paused.
 
 ## Editor
 
@@ -138,7 +140,11 @@ message}}`. `hello {protocol: 1}` must come first. Commands: `capabilities`,
   asset stat + host binary + size), host connection (connect or spawn
   detached), workshop scanning and import (`rinka-host import`, up to 3
   concurrent dry runs), the `rinka://app/…` protocol (renderer files,
-  `library/<id>/…` with byte ranges, `thumbs/…`, `workshop/<id>/…`).
+  `library/<id>/…` with byte ranges, `thumbs/…`, `workshop/<id>/…`), the
+  tray icon (`tray.ts`: open, pause animation, quit; StatusNotifierItem on
+  Linux). One editor per data directory (single-instance lock); while the
+  tray icon is shown, closing the window hides it. `config.json` also holds
+  editor settings (`trayIcon`).
 - Renderer: Preact views: Library (grid/compact/list, filters, sort, search,
   drag-and-drop), Wallpaper (full-window preview, glass bar, display map,
   scene tools, report popover), Import (workshop items, report panel),

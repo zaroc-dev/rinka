@@ -3,6 +3,8 @@ import type { HostState, LibraryEntry, WorkshopItem, RinkaApi } from "../shared/
 
 const api: RinkaApi = {
   appInfo: () => ipcRenderer.invoke("app:info"),
+  appSettings: () => ipcRenderer.invoke("settings:get"),
+  setAppSettings: (patch) => ipcRenderer.invoke("settings:set", patch),
   listProjects: () => ipcRenderer.invoke("library:list"),
   createColor: (title, color) => ipcRenderer.invoke("library:create-color", title, color),
   importFiles: (paths, kind) => ipcRenderer.invoke("library:import-files", paths, kind),
@@ -28,6 +30,7 @@ const api: RinkaApi = {
   onHostState: (listener) => {
     ipcRenderer.on("host:state", (_event, state: HostState) => listener(state));
   },
+  setPaused: (paused) => ipcRenderer.invoke("host:pause", paused),
 
   reportPreview: (report) => ipcRenderer.send("preview:report", report),
 };
