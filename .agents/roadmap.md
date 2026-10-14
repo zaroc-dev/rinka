@@ -27,48 +27,75 @@ unexplained mismatch on validated scenes.
 - Import (36 local workshop items: 33 scenes, 2 videos, 1 web):
   - all 564 packaged and 311 built-in textures decode;
   - 264 of 277 effect shader pairs translate;
-  - fully supported: 3 (Crimson Sun, Faded Memories (Update), 她的房间);
-    partial: 1 (Elden Ring Ranni, sprite sheet shows first frame);
-    blocked: 32.
+  - scenes: 1 fully supported (Crimson Sun), 1 partial (Elden Ring Ranni,
+    sprite sheet shows first frame), 31 blocked; both videos convert fully.
+    (Before 2026-10-14 this read "3 fully supported", counting the videos.)
 - Crimson Sun native: ~28 fps, ~2 ms CPU per frame, 507 MiB GPU.
 
 ## Blockers by scenes affected
 
 | Feature | Scenes | Notes |
 | --- | --- | --- |
-| Particles | 28 | 239 particle objects |
-| `flat` / `composelayer` layer shaders | 13 each | Solid-color and composition layers |
+| Particles | 28 | 338 systems (99 of them children); census below |
 | Sound | 13 | Playback plus audio-reactive values |
 | Multi-buffer effects | 11 | Effects with named FBOs between passes |
+| `composelayer` layer shader | 10 | 13 layers |
 | Untranslatable shaders | 9 | 13 pairs; e.g. HLSL implicit truncation |
-| Text | 7 | |
-| Composition layers | 4 | |
+| Text | 7 | 37 layers |
+| Camera parallax, bloom | 6 each | Scene-level settings |
+| `flat` layer shader | 4 | 13 layers (earlier listed as 13 scenes) |
+| Composition layers (effects on everything below) | 4 | |
+
+Scenes blocked by one feature only: particles 3, text 1, sprite sheets 1.
+Particles plus sound would fully convert 5 more; nothing short of
+particles converts more than 2.
+
+### Particle census (2026-10-14, 28 scenes)
+
+| Kind | Used (systems / scenes) |
+| --- | --- |
+| Emitters | `sphererandom` 274/27, `boxrandom` 63/14 |
+| Initializers | `lifetimerandom`, `sizerandom` 338/28; `colorrandom` 279/26; `velocityrandom` 193/24; `rotationrandom` 107/19; `alpharandom` 80/18; `turbulentvelocityrandom` 65/13; `angularvelocityrandom` 31/11; four others in 1 scene |
+| Operators | `movement` 308/26; `alphafade` 302/28; `sizechange` 93/11; `oscillatealpha` 82/16; `oscillateposition` 76/13; `controlpointattract` 60/7; `turbulence` 59/10; `angularmovement` 34/13; `oscillatesize` 34/8; `colorchange` 24/3; six others in 1 scene |
+| Renderers | `sprite` 280/28; `spritetrail` 18/6; `ropetrail` 8/6; `rope` 25/3 |
+
+A first version with both emitters, the eight common initializers, the nine
+operators above except `controlpointattract`, and the `sprite` renderer
+covers every particle system in 13 of the 28 scenes. Adding
+`controlpointattract`, `spritetrail` and the rope renderers covers 27.
+Max count: median 20, largest 100 000.
 
 Values: 162 scripted, 20 animated, 161 user-bound (all use static values now).
 
 ## Next, in order
 
-1. **Solid-color and composition layers** (`flat`, `composelayer`): cheapest,
-   unblocks parts of 13 scenes each.
-2. **Particles**: the largest unlock (28 scenes). Needs a deterministic
-   simulation design that can seek.
-3. **Multi-buffer effects**: named intermediate buffers, correct sizing
+1. **Particles v1** (census above): the gate for 28 of 33 scenes. Needs a
+   deterministic simulation that can seek.
+2. **Sound playback**: with particles, fully converts 5 more scenes.
+3. **Solid-color and composition layers** (`flat`, `composelayer`): cheap,
+   but in 4 and 10 scenes, all also blocked by other features.
+4. **Multi-buffer effects**: named intermediate buffers, correct sizing
    (current effect buffer sizing is approximate).
-4. **M3 editor**: layer list (reorder, hide, transform, configure) with live
+5. **M3 editor**: layer list (reorder, hide, transform, configure) with live
    preview; save and reopen; then project stacks per output.
-5. Text, sound, SceneScript, animated values, user properties in the UI.
+6. Text, SceneScript, animated values, user properties in the UI.
 
-The developer was offered the choice between 1, 2 and 4 first; no answer yet.
+Reordered on 2026-10-14 after recounting by scene instead of by layer; the
+earlier order put solid and composition layers first on a count of 13
+scenes each.
 
 ## Open items
 
 - Hyprland: untested.
 - Fractional scaling, output reconnection and pausing on power-off: untested.
-- Windows: experimental color/image/scene playback and named-pipe control
-  implemented; three-monitor protocol/playback smoke passes. Native video,
-  visibility pausing and screen acceptance checks remain open
+- Windows: experimental color/image/scene playback, named-pipe control,
+  covered-monitor pausing and tray. Native video, the covered-monitor GPU
+  measurement (#3) and screen acceptance checks remain open
   (`docs/windows-host.md`).
-- Host decodes images on its main thread (blocks the loop on large images).
+- Niri: whether covered background surfaces still get frame callbacks (#3).
+- Wayland host decodes images on its main thread (blocks the loop on large
+  images). The Windows host renders off the window thread but still decodes
+  on its render thread.
 - Hardware video decode; MKV/WebM in the preview (WebCodecs needs a demuxer);
   HDR and 10-bit video.
 - Asset content hashes in the project manifest.
