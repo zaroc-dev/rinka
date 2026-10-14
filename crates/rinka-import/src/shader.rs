@@ -44,6 +44,21 @@ const PRELUDE: &str = r#"
 #define float2x2 mat2
 #define float3x3 mat3
 #define float4x4 mat4
+// HLSL converts on assignment: a scalar fills every component and a longer
+// vector is truncated. Swizzle assignments go through these (see
+// `implicit_swizzle_casts`); overloading picks the conversion by type.
+vec2 rinka_cast2(float v) { return vec2(v); }
+vec2 rinka_cast2(int v) { return vec2(float(v)); }
+vec2 rinka_cast2(vec2 v) { return v; }
+vec2 rinka_cast2(vec3 v) { return v.xy; }
+vec2 rinka_cast2(vec4 v) { return v.xy; }
+vec3 rinka_cast3(float v) { return vec3(v); }
+vec3 rinka_cast3(int v) { return vec3(float(v)); }
+vec3 rinka_cast3(vec3 v) { return v; }
+vec3 rinka_cast3(vec4 v) { return v.xyz; }
+vec4 rinka_cast4(float v) { return vec4(v); }
+vec4 rinka_cast4(int v) { return vec4(float(v)); }
+vec4 rinka_cast4(vec4 v) { return v; }
 "#;
 
 /// Identifiers reserved in GLSL 4.50 but legal in the GLSL 1.x dialect
@@ -507,7 +522,28 @@ fn rename_main(body: &str) -> String {
     let body = main.replace(body, "void rinka_main()");
     let reserved = Regex::new(&format!(r"\b({})\b", RESERVED.join("|"))).expect("regex");
     let body = reserved.replace_all(&body, "rinka_$1");
-    swap_literal_first_minmax(&body)
+    implicit_swizzle_casts(&swap_literal_first_minmax(&body))
+}
+
+/// HLSL lets `v.rgb = 0.5;` fill every component and `v.rgb = c;` drop the
+/// extra components of a longer `c`; GLSL rejects both (naga reports the
+/// error far from its cause). Wraps the right side of plain swizzle
+/// assignments in `rinka_castN`, which converts by type.
+fn implicit_swizzle_casts(src: &str) -> String {
+    let assign =
+        Regex::new(r"(\.(?:[xyzw]{2,4}|[rgba]{2,4}))(\s*)=(\s*)([^=;][^;]*);").expect("regex");
+    assign
+        .replace_all(src, |c: &regex::Captures| {
+            let n = c[1].len() - 1;
+            format!(
+                "{}{}={}rinka_cast{n}({});",
+                &c[1],
+                &c[2],
+                &c[3],
+                c[4].trim_end()
+            )
+        })
+        .into_owned()
 }
 
 /// HLSL accepts `max(0, v)`; GLSL only has `max(v, scalar)`. Rewrites calls
@@ -670,6 +706,24 @@ void main() {
 
     fn include(name: &str) -> Option<String> {
         (name == "common.h").then(|| "#define M_PI 3.14159265359\n".to_owned())
+    }
+
+    #[test]
+    fn swizzle_assignments_convert() {
+        assert_eq!(
+            implicit_swizzle_casts("albedo.rgb = greyscale(albedo.rgb);"),
+            "albedo.rgb = rinka_cast3(greyscale(albedo.rgb));"
+        );
+        // Comparisons, compound assignments and single components stay.
+        let kept = "if (a.xy == b.xy) c.rgb *= 2.0; c.r = 1.0; d.xy += e;";
+        assert_eq!(implicit_swizzle_casts(kept), kept);
+    }
+
+    #[test]
+    fn scalar_to_swizzle_translates() {
+        let frag = "varying vec2 v_TexCoord;\nuniform sampler2D g_Texture0;\nvoid main() {\n    vec4 c = texSample2D(g_Texture0, v_TexCoord);\n    c.rgb = dot(c.rgb, vec3(0.3, 0.59, 0.11));\n    c.rg = c;\n    gl_FragColor = c;\n}\n";
+        let vert = "attribute vec3 a_Position;\nattribute vec2 a_TexCoord;\nvarying vec2 v_TexCoord;\nvoid main() {\n    gl_Position = vec4(a_Position, 1.0);\n    v_TexCoord = a_TexCoord;\n}\n";
+        translate(vert, frag, &BTreeMap::new(), &include).expect("translates");
     }
 
     #[test]
