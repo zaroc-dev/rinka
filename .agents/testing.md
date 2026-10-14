@@ -46,6 +46,16 @@ printf '%s\n' '{"id":1,"cmd":"hello","protocol":1}' '{"id":2,"cmd":"outputs"}' \
 - CPU: `ps -o times= -p PID` before and after a fixed interval. Static content
   should be close to zero.
 
+## Windows host
+
+For the experimental Windows host, run `cargo build -p rinka-host`, install
+the app dependencies, then `node app/scripts/windows-host-smoke.mjs` from the
+repository root. It uses a separate named pipe and generated content, verifies
+protocol/playback/restore behavior and shuts its host down. `--hold` leaves a
+30-second interval for inspection. It temporarily replaces visible desktop
+content; successful surface setup is not proof of exact screen pixels. See
+`docs/windows-host.md` for the measured checks and remaining acceptance work.
+
 ## Editor
 
 - Smoke mode: `RINKA_SMOKE=1 RINKA_SMOKE_OUT=out.png RINKA_SMOKE_DELAY=ms`

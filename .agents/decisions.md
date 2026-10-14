@@ -22,7 +22,7 @@ reason here in the same change.
 | One Rust engine, native and WASM | Preview and wallpaper cannot drift apart if they are the same code. |
 | wgpu, WGSL as the canonical shader language | Runs on Vulkan, Metal, DX12 and WebGPU; naga translates GLSL to WGSL. |
 | No optional wgpu features, WebGPU default limits | Native must never depend on something the preview lacks. |
-| Detached `rinka-host` process with a JSON-lines Unix socket | Wallpapers survive the editor; JSON is easy to debug with `socat`; frames never cross IPC. |
+| Detached `rinka-host` process with JSON-lines over a Unix socket (Linux) or local named pipe (Windows) | Wallpapers survive the editor; both transports share the v1 protocol; frames never cross IPC. |
 | Host also is the CLI for import and thumbnails | Native decoders (FFmpeg, full-size images, pkg/tex) in one place; the editor spawns it with JSON jobs. |
 | Background layer-shell surface per output, one composed surface per monitor | Compositor stacking is not a layering mechanism; the engine composes. |
 | Output assignments live in `~/.config/rinka/config.json`, not in projects | Projects stay portable; `serve --restore` reads the same file. |
@@ -65,6 +65,9 @@ reason here in the same change.
 - Particle simulation design (determinism, seeking).
 - Project stacks: schema and per-instance overrides.
 - Package format beyond a project directory; asset content hashes.
-- Windows host: presentation and control transport (named pipe), minimum version.
+- Windows host: minimum supported version, packaging, video and visibility
+  signals. Initial presentation uses Explorer child windows (classic WorkerW
+  or raised Progman desktop), with named-pipe control; acceptance remains
+  incomplete (`docs/windows-host.md`).
 - Performance budgets (baseline numbers are in `docs/m0-baseline.md`).
 - Hardware video decode, MKV/WebM in the preview, HDR/10-bit.

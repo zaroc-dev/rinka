@@ -5,9 +5,10 @@
 // the editor reconnects to an already running host on start.
 
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, openSync, statSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, statSync } from "node:fs";
 import net from "node:net";
 import path from "node:path";
+import { userInfo } from "node:os";
 
 export const PROTOCOL_VERSION = 1;
 
@@ -18,6 +19,10 @@ export class HostError extends Error {
 }
 
 export function defaultSocketPath(): string | null {
+  if (process.platform === "win32") {
+    const user = process.env.USERNAME ?? userInfo().username;
+    return `\\\\.\\pipe\\rinka-host-${user}`;
+  }
   const runtime = process.env.XDG_RUNTIME_DIR;
   return runtime ? path.join(runtime, "rinka", "host.sock") : null;
 }
@@ -115,8 +120,12 @@ export async function connectOrSpawn(
   logFile: string,
 ): Promise<{ conn: HostConnection; hello: Hello; spawned: boolean }> {
   const handshake = async (conn: HostConnection) => {
-    const hello = await conn.request<Hello>("hello", { protocol: PROTOCOL_VERSION, client: "rinka-app" });
-    return hello;
+    try {
+      return await conn.request<Hello>("hello", { protocol: PROTOCOL_VERSION, client: "rinka-app" });
+    } catch (error) {
+      conn.close();
+      throw error;
+    }
   };
   try {
     const conn = await HostConnection.connect(socketPath);
@@ -128,17 +137,25 @@ export async function connectOrSpawn(
 
   mkdirSync(path.dirname(logFile), { recursive: true });
   const log = openSync(logFile, "a");
-  const child = spawn(binary, ["serve", "--socket", socketPath], {
-    detached: true,
-    stdio: ["ignore", log, log],
-  });
+  const child = (() => {
+    try {
+      return spawn(binary, ["serve", "--socket", socketPath], {
+        detached: true,
+        windowsHide: true,
+        stdio: ["ignore", log, log],
+      });
+    } finally { closeSync(log); }
+  })();
   child.unref();
   let exited: number | null = null;
+  let spawnError: Error | null = null;
   child.once("exit", (code) => (exited = code ?? -1));
+  child.once("error", (error) => (spawnError = error));
 
   const deadline = Date.now() + 10_000;
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 100));
+    if (spawnError) throw new HostError("spawn_failed", String(spawnError));
     if (exited !== null) throw new HostError("spawn_failed", `rinka-host exited with ${exited}; see ${logFile}`);
     try {
       const conn = await HostConnection.connect(socketPath);

@@ -82,11 +82,12 @@ spawn-at-startup "rinka-host" "serve" "--restore"
 | Particles, solid and composition layers, multi-buffer effects | Next, in the order measured scenes need them |
 | Text, sound, SceneScript, 3D | Planned |
 | Layer editor, project stacks | Planned |
-| Windows | Engine builds; wallpaper playback not implemented |
+| Windows | Experimental color, image and scene playback; video and desktop acceptance checks remain open |
 
 Milestone notes with measurements: [M0](docs/m0-baseline.md),
 [M1 images](docs/m1-images.md), [M2 video](docs/m2-video.md),
 [M3 Wallpaper Engine](docs/m3-wallpaper-engine.md).
+Windows measurements and remaining checks: [Windows host](docs/windows-host.md).
 
 ## Development
 

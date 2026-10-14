@@ -148,7 +148,7 @@ async function restoreAssignments(): Promise<void> {
 async function startHost(): Promise<HostState> {
   if (host) return hostState;
   const socket = defaultSocketPath();
-  if (process.platform !== "linux" || !socket) {
+  if ((process.platform !== "linux" && process.platform !== "win32") || !socket) {
     setHostState({ state: "unavailable", reason: "wallpaper playback is not implemented on this platform yet" });
     return hostState;
   }

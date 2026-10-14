@@ -613,6 +613,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 
 [[package]]
+name = "embed-manifest"
+version = "1.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ba92c8f4591bf29f89716b45e5f5f56577adbb81426e5620c6e994da7c88bb7a"
+
+[[package]]
 name = "env_filter"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1911,6 +1917,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "embed-manifest",
  "env_logger",
  "ffmpeg-next",
  "image",
@@ -1924,6 +1931,7 @@ dependencies = [
  "smithay-client-toolkit 0.21.1",
  "wayland-backend",
  "wgpu",
+ "windows-sys 0.61.2",
  "winit",
 ]
 

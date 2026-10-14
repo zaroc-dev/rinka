@@ -80,6 +80,24 @@ something costs more than a few minutes.
   with "a value is required". Use `Option<Option<PathBuf>>` and keep a parse
   test for the bare form the home-manager module uses.
 
+## Windows host
+
+- **Win32 functions can need extra feature gates.** `ConnectNamedPipe` needs
+  `windows-sys/Win32_System_IO` even for synchronous calls with null OVERLAPPED.
+- **The desktop layout can change when requested.** Check Progman's
+  `WS_EX_NOREDIRECTIONBITMAP` after sending `0x052C`, not before. Raised
+  desktops need layered children beneath `SHELLDLL_DefView`; the manifest
+  declares layered-child support and per-monitor DPI awareness.
+- **Disconnected pipe instances need resetting.** A client can close before
+  `ConnectNamedPipe`, leaving `ERROR_NO_DATA`; disconnect that instance before
+  accepting again or the listener spins.
+- **Recovery must schedule its own wakeup.** A failed Explorer rebuild sets a
+  new retry deadline; include it in the timer after rebuilding. Clear frame
+  deadlines for destroyed windows to avoid drawing against null HWNDs.
+- **Shutdown replies need delivery coordination.** The host waits (bounded)
+  for the pipe thread to flush the reply before process exit; a fixed sleep
+  races the client thread.
+
 ## Wallpaper Engine formats
 
 - **Volume textures** (flag `0x40`, color LUTs) have an extra depth field in

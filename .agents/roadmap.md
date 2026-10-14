@@ -64,8 +64,10 @@ The developer was offered the choice between 1, 2 and 4 first; no answer yet.
 
 - Hyprland: untested.
 - Fractional scaling, output reconnection and pausing on power-off: untested.
-- Windows: playback surface and control transport not implemented
-  (`rinka-host` only type-checks for Windows).
+- Windows: experimental color/image/scene playback and named-pipe control
+  implemented; three-monitor protocol/playback smoke passes. Native video,
+  visibility pausing and screen acceptance checks remain open
+  (`docs/windows-host.md`).
 - Host decodes images on its main thread (blocks the loop on large images).
 - Hardware video decode; MKV/WebM in the preview (WebCodecs needs a demuxer);
   HDR and 10-bit video.

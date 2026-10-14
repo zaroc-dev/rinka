@@ -27,3 +27,21 @@ wayland-backend = { version = "0.3", features = ["client_system"] }
 # Linked against the FFmpeg from the dev shell.
 ffmpeg-next = "9"
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_LibraryLoader",
+    "Win32_System_IO",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+    "Win32_UI_HiDpi",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[build-dependencies]
+# Pure Rust, so cross-checking for Windows from Linux still works.
+embed-manifest = "1.4"
+
