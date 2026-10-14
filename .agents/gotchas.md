@@ -75,6 +75,10 @@ something costs more than a few minutes.
 - **Process checks.** `pgrep -x rinka-host` can match another host, and
   `pgrep -f` matches the `nix develop` wrapper. Find the PID by comm *and*
   socket argument.
+- **Optional-value path flags.** clap's `PathBuf` parser rejects an empty
+  `default_missing_value = ""`, so bare `serve --restore` failed at login
+  with "a value is required". Use `Option<Option<PathBuf>>` and keep a parse
+  test for the bare form the home-manager module uses.
 
 ## Wallpaper Engine formats
 

@@ -37,8 +37,12 @@ enum Cmd {
         /// Restore the wallpapers the editor assigned, from its data
         /// directory [default: ~/.config/rinka]. Use this when starting the
         /// host at login.
-        #[arg(long, num_args = 0..=1, default_missing_value = "")]
-        restore: Option<PathBuf>,
+        ///
+        /// `None`: not given; `Some(None)`: bare flag (default directory).
+        /// An empty `default_missing_value` would be rejected by the path
+        /// parser, so the bare flag is modelled as `Some(None)`.
+        #[arg(long, num_args = 0..=1)]
+        restore: Option<Option<PathBuf>>,
     },
     /// Show a project in a desktop window.
     Preview {
@@ -133,7 +137,7 @@ fn load_with_image(dir: &std::path::Path) -> anyhow::Result<preview::Loaded> {
 }
 
 #[cfg(target_os = "linux")]
-fn serve(socket: Option<PathBuf>, restore: Option<PathBuf>) -> anyhow::Result<()> {
+fn serve(socket: Option<PathBuf>, restore: Option<Option<PathBuf>>) -> anyhow::Result<()> {
     let socket = match socket {
         Some(s) => s,
         None => control::default_socket_path()?,
@@ -141,7 +145,10 @@ fn serve(socket: Option<PathBuf>, restore: Option<PathBuf>) -> anyhow::Result<()
     let assignments = match restore {
         None => Default::default(),
         Some(dir) => {
-            let dir = if dir.as_os_str().is_empty() { default_data_dir()? } else { dir };
+            let dir = match dir {
+                Some(dir) => dir,
+                None => default_data_dir()?,
+            };
             saved_assignments(&dir)
         }
     };
@@ -182,7 +189,7 @@ fn saved_assignments(dir: &std::path::Path) -> std::collections::HashMap<String,
 }
 
 #[cfg(not(target_os = "linux"))]
-fn serve(_socket: Option<PathBuf>, _restore: Option<PathBuf>) -> anyhow::Result<()> {
+fn serve(_socket: Option<PathBuf>, _restore: Option<Option<PathBuf>>) -> anyhow::Result<()> {
     anyhow::bail!("wallpaper presentation is not implemented on this platform yet; use `preview`")
 }
 
@@ -244,4 +251,33 @@ fn default_we_assets() -> Option<PathBuf> {
             .join("steamapps/common/wallpaper_engine/assets")
     })
     .find(|p| p.is_dir())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn restore(args: &[&str]) -> Option<Option<PathBuf>> {
+        let cli = Cli::try_parse_from(["rinka-host", "serve"].iter().chain(args)).unwrap();
+        match cli.command {
+            Cmd::Serve { restore, .. } => restore,
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn restore_flag_forms() {
+        assert_eq!(restore(&[]), None);
+        // The form the home-manager module and README use.
+        assert_eq!(restore(&["--restore"]), Some(None));
+        assert_eq!(
+            restore(&["--restore", "/data"]),
+            Some(Some(PathBuf::from("/data")))
+        );
+        assert_eq!(
+            restore(&["--restore", "--socket", "/s"]),
+            Some(None),
+            "a following flag is not taken as the directory"
+        );
+    }
 }
