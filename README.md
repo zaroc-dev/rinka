@@ -7,7 +7,7 @@
   drawn by a native Rust engine, with an editor that previews them through the same engine.
 </p>
 
-<p align="center"><a href="https://zaroc-dev.github.io/rinka/">Website</a> · <a href="#install">Install</a> · <a href="SPEC.md">Spec</a></p>
+<p align="center"><a href="https://zaroc-dev.github.io/rinka/">Website</a> · <a href="#install">Install</a> · <a href="AGENTS.md">Contributing</a></p>
 
 ![The Rinka editor](site/images/wallpaper.jpg)
 
@@ -122,6 +122,9 @@ rinka-host info
 The control protocol (newline-delimited JSON over
 `$XDG_RUNTIME_DIR/rinka/host.sock`) is documented in
 `crates/rinka-host/src/protocol.rs`.
+
+Contributor notes (architecture, decisions, known traps, testing, roadmap)
+are in [AGENTS.md](AGENTS.md) and [.agents/](.agents/).
 
 ## License
 

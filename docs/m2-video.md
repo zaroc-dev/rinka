@@ -1,6 +1,6 @@
 # M2: video
 
-Status as of 2026-10-14. Covers SPEC.md §11 M2.
+Status as of 2026-10-14. Covers milestone M2 (see .agents/roadmap.md).
 
 ## Decisions
 

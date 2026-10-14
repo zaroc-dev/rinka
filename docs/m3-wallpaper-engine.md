@@ -1,6 +1,6 @@
 # M3: Wallpaper Engine import
 
-Status as of 2026-10-14. Covers SPEC.md §6 and §11 M3. Measured against the
+Status as of 2026-10-14. Covers milestone M3 and the import rules in AGENTS.md. Measured against the
 developer's library: 36 workshop items (33 scenes, 2 videos, 1 web) and the
 Wallpaper Engine install's `assets` folder.
 

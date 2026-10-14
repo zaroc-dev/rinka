@@ -1,6 +1,6 @@
 # M1: images
 
-Status as of 2026-10-14. Covers SPEC.md §11 M1.
+Status as of 2026-10-14. Covers milestone M1 (see .agents/roadmap.md).
 
 ## Decisions
 

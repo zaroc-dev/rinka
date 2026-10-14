@@ -1,6 +1,6 @@
 # M0 baseline
 
-Recorded 2026-10-14 on the developer machine. Covers the M0 items in SPEC.md §11.
+Recorded 2026-10-14 on the developer machine. Covers milestone M0 (see .agents/roadmap.md).
 
 ## Environment
 
