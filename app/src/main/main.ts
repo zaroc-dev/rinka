@@ -52,6 +52,13 @@ const repoRoot = path.resolve(appDir, "..");
 const rendererDir = path.join(appDir, "dist", "renderer");
 const hostBinary = () => findHostBinary(repoRoot);
 
+/** The window and tray icon: ICO on Windows (several sizes), PNG elsewhere. */
+const appIcon = () => path.join(appDir, "dist", "resources", process.platform === "win32" ? "icon.ico" : "icon.png");
+
+// Groups the editor's windows under Rinka in the Windows taskbar instead of
+// Electron's own entry.
+if (process.platform === "win32") app.setAppUserModelId("dev.zaroc.rinka");
+
 let library: Library;
 let config: ConfigStore;
 let thumbnails: Thumbnails;
@@ -345,6 +352,8 @@ function createWindow(): void {
     minWidth: 760,
     minHeight: 520,
     title: "Rinka",
+    // Linux desktops take the icon from the desktop entry; Windows uses this.
+    icon: appIcon(),
     backgroundColor: "#080f10",
     webPreferences: {
       preload: path.join(appDir, "dist", "preload.cjs"),
