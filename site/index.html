@@ -4,337 +4,325 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Rinka</title>
-<meta name="description" content="Rinka is a native wallpaper engine for Wayland: images, videos and converted Wallpaper Engine scenes, with a live preview that renders exactly what your monitors show.">
+<meta name="description" content="Rinka is a wallpaper engine for Niri and Hyprland. It plays images, videos and converted Wallpaper Engine scenes, and its editor previews them with the same renderer.">
 <meta property="og:title" content="Rinka">
-<meta property="og:description" content="A native wallpaper engine for Wayland, with a live editor and Wallpaper Engine import.">
+<meta property="og:description" content="A wallpaper engine for Niri and Hyprland, with Wallpaper Engine scene import.">
 <meta property="og:image" content="images/wallpaper.jpg">
+<meta name="theme-color" content="#0b0d1c">
 <link rel="icon" href="images/rinka.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..800&family=Instrument+Sans:wght@400..600&family=JetBrains+Mono:wght@400..600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700&family=Instrument+Sans:wght@400..600&family=JetBrains+Mono:wght@400..500&display=swap">
 <style>
-/* Layout: a dark gallery page lit by one foxfire glow; the app itself is the hero image. */
+/* Layout: the first screen is a wallpaper with nothing on it but a caption;
+   below it, the page reads like a project's manual: one column, plain
+   sections, tables where there are facts. */
 :root {
   color-scheme: dark;
-  --bg: #080f10;
-  --text: #e4eff1;
-  --primary: #a2c7ce;
-  --secondary: #354365;
-  --accent: #6a73b1;
-  --surface: #0e1819;
-  --line: rgb(162 199 206 / 0.14);
-  --muted: #8da3a7;
-  --live: #8fd6b0;
-  --danger: #e8898c;
-  --display: "Bricolage Grotesque", system-ui, sans-serif;
+  --bg: #0b0d1c;
+  --surface: #12152a;
+  --text: #e6e8f2;
+  --soft: #b9bdd3;
+  --muted: #858aa6;
+  --line: rgb(185 189 211 / 0.14);
+  --link: #a9b4ec;
+  --ok: #94d6b0;
+  --partial: #e3c48a;
+  --no: #8c90aa;
   --body: "Instrument Sans", system-ui, sans-serif;
   --mono: "JetBrains Mono", ui-monospace, monospace;
 }
 * { box-sizing: border-box; }
-html { scroll-behavior: smooth; }
 body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font: 400 17px/1.6 var(--body);
+  font: 400 17px/1.65 var(--body);
   -webkit-font-smoothing: antialiased;
 }
-a { color: var(--primary); }
-:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 6px; }
-.wrap { width: min(1120px, 100%); margin: 0 auto; padding-inline: 24px; }
+a { color: var(--link); text-underline-offset: 3px; text-decoration-thickness: 1px; }
+a:hover { color: var(--text); }
+:focus-visible { outline: 2px solid var(--link); outline-offset: 3px; border-radius: 4px; }
+code { font: 0.88em var(--mono); }
 
-/* ---- nav */
-nav {
-  position: sticky;
-  top: env(safe-area-inset-top, 0px);
-  z-index: 10;
-  backdrop-filter: blur(18px);
-  background: rgb(8 15 16 / 0.72);
-  border-bottom: 1px solid var(--line);
-}
-nav .wrap { display: flex; align-items: center; gap: 24px; height: 64px; }
-.brand { display: flex; align-items: center; gap: 10px; text-decoration: none; color: var(--text); font: 800 22px var(--display); letter-spacing: -0.03em; }
-.brand img { width: 30px; height: 30px; }
-nav .links { margin-left: auto; display: flex; gap: 22px; align-items: center; font-size: 15px; }
-nav .links a { color: var(--muted); text-decoration: none; }
-nav .links a:hover { color: var(--text); }
-.pill-link {
-  color: var(--bg) !important;
-  background: var(--primary);
-  padding: 8px 16px;
-  border-radius: 999px;
-  font-weight: 600;
-}
-
-/* ---- hero */
-.hero { position: relative; overflow: hidden; padding-block: 96px 40px; }
-.foxfire {
-  position: absolute;
-  top: 10px;
-  right: -60px;
-  width: 640px;
-  height: 640px;
-  pointer-events: none;
-  filter: blur(40px);
-  opacity: 0.9;
-}
-.foxfire span {
-  position: absolute;
-  border-radius: 50% 50% 50% 50% / 60% 60% 40% 40%;
-  background: radial-gradient(circle at 50% 70%, rgb(220 244 250 / 0.85), rgb(120 196 220 / 0.45) 38%, rgb(106 115 177 / 0) 72%);
-  animation: drift 9s ease-in-out infinite;
-}
-.foxfire span:nth-child(1) { left: 34%; top: 30%; width: 260px; height: 320px; }
-.foxfire span:nth-child(2) { left: 66%; top: 18%; width: 110px; height: 140px; animation-delay: -3s; animation-duration: 11s; }
-.foxfire span:nth-child(3) { left: 18%; top: 56%; width: 80px; height: 100px; animation-delay: -6s; animation-duration: 13s; }
-@keyframes drift {
-  0%, 100% { transform: translate(0, 0) scale(1); }
-  50% { transform: translate(-18px, -26px) scale(1.06); }
-}
-.hero-text { position: relative; max-width: 720px; }
-.hero h1 {
-  margin: 0;
-  font: 800 clamp(44px, 7vw, 84px) / 0.98 var(--display);
-  letter-spacing: -0.035em;
-  text-wrap: balance;
-}
-.hero h1 em { font-style: normal; color: var(--primary); }
-.lede { margin: 26px 0 0; max-width: 60ch; font-size: 19px; color: #c6d6d9; }
-.ctas { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 34px; }
-.button {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  height: 46px;
-  padding: 0 22px;
-  border-radius: 999px;
-  font-weight: 600;
-  text-decoration: none;
-  border: 1px solid var(--line);
-  color: var(--text);
-  background: var(--surface);
-}
-.button.primary { background: var(--primary); color: var(--bg); border-color: var(--primary); }
-.button:hover { border-color: var(--primary); }
-.meta { margin-top: 22px; font: 500 13px var(--mono); color: var(--muted); }
-
-.shot {
+/* ---- the wallpaper */
+.desktop {
   position: relative;
-  margin-top: 64px;
-  border-radius: 22px;
+  height: 100vh;
+  height: 100svh;
+  min-height: 540px;
   overflow: hidden;
-  border: 1px solid rgb(228 239 241 / 0.16);
-  box-shadow: 0 40px 120px rgb(0 0 0 / 0.6), 0 0 0 1px rgb(0 0 0 / 0.4);
+  background: #262a52;
 }
-.shot img { display: block; width: 100%; height: auto; max-width: 100%; }
+.desktop svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.mist { animation: mist 70s linear infinite alternate; }
+.mist.far { animation-duration: 95s; animation-direction: alternate-reverse; }
+@keyframes mist {
+  from { transform: translateX(-6%); }
+  to { transform: translateX(6%); }
+}
+.caption {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 120px 0 44px;
+  background: linear-gradient(to bottom, rgb(11 13 28 / 0), rgb(11 13 28 / 0.75) 60%, var(--bg));
+}
+.caption .wrap { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 20px 40px; }
+.name {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font: 700 clamp(40px, 6vw, 60px) / 1 "Bricolage Grotesque", var(--body);
+  letter-spacing: -0.03em;
+}
+.name img { width: 0.9em; height: 0.9em; }
+.tagline { margin: 10px 0 0; color: var(--soft); font-size: 18px; }
+.quick { display: grid; gap: 8px; justify-items: start; font-size: 15px; }
+.quick .cmd { display: flex; align-items: center; gap: 10px; }
+.quick nav { display: flex; gap: 18px; color: var(--muted); }
+.wallpaper-credit { position: absolute; top: 16px; right: 20px; margin: 0; font: 12px var(--mono); color: rgb(230 232 242 / 0.45); }
 
-/* ---- sections */
-section { padding-block: 72px; }
-.kicker { font: 600 13px var(--mono); color: var(--primary); text-transform: uppercase; letter-spacing: 0.12em; margin: 0 0 12px; }
-h2 { margin: 0; font: 750 clamp(30px, 4.5vw, 46px) / 1.05 var(--display); letter-spacing: -0.025em; text-wrap: balance; max-width: 22ch; }
-.section-lede { color: var(--muted); max-width: 62ch; margin: 16px 0 0; }
+/* ---- the manual */
+.wrap { width: min(1080px, 100%); margin: 0 auto; padding-inline: 24px; }
+.col > * { max-width: 700px; }
+main section { padding-block: 56px 8px; }
+h2 { margin: 0 0 14px; font-size: 24px; font-weight: 600; letter-spacing: -0.01em; }
+h3 { margin: 28px 0 6px; font-size: 18px; font-weight: 600; }
+p { margin: 0 0 14px; }
+.soft { color: var(--soft); }
+.muted { color: var(--muted); }
+.intro { font-size: 20px; line-height: 1.55; color: var(--soft); max-width: 640px; margin: 0; }
+.intro strong { color: var(--text); font-weight: 500; }
 
-.features { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0; margin-top: 44px; border-top: 1px solid var(--line); }
-.feature { padding: 30px 32px 30px 0; border-bottom: 1px solid var(--line); }
-.feature:nth-child(odd) { padding-right: 40px; border-right: 1px solid var(--line); }
-.feature:nth-child(even) { padding-left: 40px; }
-.feature h3 { margin: 0 0 8px; font: 700 21px var(--display); letter-spacing: -0.01em; }
-.feature p { margin: 0; color: #c0d0d3; }
-.feature .fact { display: inline-block; margin-top: 14px; font: 500 13px var(--mono); color: var(--primary); }
+figure { margin: 40px 0 0; }
+figure img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+}
+figcaption { margin-top: 10px; font-size: 14px; color: var(--muted); }
 
-.split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: 48px; align-items: center; }
-.split .shot { margin-top: 0; }
+dl.list { margin: 0; display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 16px 28px; }
+dl.list dt { font-weight: 600; }
+dl.list dd { margin: 0; color: var(--soft); }
 
-/* ---- install */
-.steps { display: grid; gap: 22px; margin-top: 36px; }
-.step { display: grid; grid-template-columns: minmax(0, 260px) minmax(0, 1fr); gap: 28px; align-items: start; }
-.step h3 { margin: 6px 0 4px; font: 700 18px var(--display); }
-.step p { margin: 0; color: var(--muted); font-size: 15px; }
-.code { position: relative; }
+table { width: 100%; border-collapse: collapse; font-size: 15px; margin-top: 8px; }
+th, td { text-align: left; vertical-align: top; padding: 11px 16px 11px 0; border-bottom: 1px solid var(--line); }
+th { font-weight: 500; color: var(--muted); font-size: 13px; }
+td:first-child { white-space: nowrap; }
+.state { font: 500 13px var(--mono); white-space: nowrap; }
+.state::before { content: "●"; margin-right: 8px; font-size: 9px; vertical-align: 2px; }
+.state.ok { color: var(--ok); }
+.state.partial { color: var(--partial); }
+.state.no { color: var(--no); }
+.num { font-family: var(--mono); font-size: 14px; }
+
+.code { position: relative; margin: 10px 0 18px; }
 pre {
   margin: 0;
-  padding: 18px 56px 18px 20px;
-  border-radius: 16px;
+  padding: 14px 64px 14px 16px;
+  border-radius: 8px;
   background: var(--surface);
   border: 1px solid var(--line);
   overflow-x: auto;
   font: 14px/1.6 var(--mono);
-  color: #d6e5e8;
+  color: #d4d8ea;
 }
+.quick pre { padding-block: 7px; padding-right: 16px; background: rgb(18 21 42 / 0.8); }
 pre .c { color: var(--muted); }
 .copy {
   position: absolute;
-  top: 10px;
-  right: 10px;
-  height: 32px;
-  padding: 0 12px;
-  border-radius: 999px;
+  top: 8px;
+  right: 8px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 6px;
   border: 1px solid var(--line);
   background: var(--bg);
   color: var(--muted);
   font: 500 12px var(--mono);
   cursor: pointer;
 }
-.copy:hover { color: var(--text); border-color: var(--primary); }
+.quick .copy { position: static; }
+.copy:hover { color: var(--text); }
 
-/* ---- status */
-.status { margin-top: 36px; display: grid; gap: 10px; }
-.row {
-  display: grid;
-  grid-template-columns: 120px minmax(0, 1fr);
-  gap: 20px;
-  padding: 16px 20px;
-  border-radius: 16px;
-  background: var(--surface);
-  border: 1px solid var(--line);
+footer { margin-top: 72px; border-top: 1px solid var(--line); padding-block: 28px 44px; color: var(--muted); font-size: 14px; }
+footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 28px; justify-content: space-between; }
+
+/* Portrait screens crop the sides of the scene; keep the moon in frame. */
+@media (max-aspect-ratio: 4/5) {
+  .moon { cx: 920px; cy: 360px; }
 }
-.state { font: 600 13px var(--mono); padding-top: 2px; }
-.state.done { color: var(--live); }
-.state.next { color: var(--primary); }
-.state.later { color: var(--muted); }
-.row h3 { margin: 0; font: 650 17px var(--display); }
-.row p { margin: 4px 0 0; color: var(--muted); font-size: 15px; }
-
-footer { border-top: 1px solid var(--line); padding-block: 36px 48px; color: var(--muted); font-size: 14px; }
-footer .wrap { display: flex; flex-wrap: wrap; gap: 12px 28px; justify-content: space-between; }
-
-@media (max-width: 820px) {
-  .features, .split { grid-template-columns: minmax(0, 1fr); }
-  .feature, .feature:nth-child(odd), .feature:nth-child(even) { padding: 24px 0; border-right: 0; }
-  .step { grid-template-columns: minmax(0, 1fr); gap: 10px; }
-  nav .links a:not(.pill-link) { display: none; }
-  .hero { padding-block: 64px 24px; }
-  .foxfire { width: 460px; height: 460px; inset: -10% -40% auto auto; }
+@media (max-width: 720px) {
+  dl.list { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  dl.list dd { margin-bottom: 14px; }
+  .intro { font-size: 18px; }
+  td:first-child { white-space: normal; }
+  .wallpaper-credit { display: none; }
 }
-@media (max-width: 480px) {
-  .row { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+@media (max-width: 560px) {
+  thead { display: none; }
+  tr { display: grid; grid-template-columns: auto 1fr; gap: 2px 14px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+  td { padding: 0; border: 0; }
+  td:last-child { grid-column: 1 / -1; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .foxfire span { animation: none; }
-  html { scroll-behavior: auto; }
+  .mist { animation: none; }
 }
 </style>
 </head>
 <body>
-<nav>
-  <div class="wrap">
-    <a class="brand" href="#"><img src="images/rinka.svg" alt="">Rinka</a>
-    <div class="links">
-      <a href="#features">Features</a>
-      <a href="#install">Install</a>
-      <a href="#status">Status</a>
-      <a class="pill-link" href="https://github.com/zaroc-dev/rinka">GitHub</a>
-    </div>
-  </div>
-</nav>
 
-<header class="hero">
-  <div class="foxfire" aria-hidden="true"><span></span><span></span><span></span></div>
-  <div class="wrap">
-    <div class="hero-text">
-      <h1>Living wallpapers for <em>Wayland</em>.</h1>
-      <p class="lede">Rinka draws images, videos and converted Wallpaper Engine scenes behind your windows on Niri and Hyprland. Its editor previews them with the same engine, so what you see while choosing is what your monitors show.</p>
-      <div class="ctas">
-        <a class="button primary" href="#install">Install with Nix</a>
-        <a class="button" href="https://github.com/zaroc-dev/rinka">Source on GitHub</a>
+<header class="desktop">
+  <!-- Quiet Ridges, one of the demo wallpapers, drawn as SVG. -->
+  <svg viewBox="0 0 1600 1000" preserveAspectRatio="xMidYMax slice" aria-hidden="true">
+    <defs>
+      <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#1f2347"/>
+        <stop offset="0.45" stop-color="#4b4a78"/>
+        <stop offset="0.72" stop-color="#8e7290"/>
+        <stop offset="0.9" stop-color="#c99a8e"/>
+      </linearGradient>
+      <radialGradient id="glow">
+        <stop offset="0" stop-color="#fff6ec" stop-opacity="0.55"/>
+        <stop offset="1" stop-color="#fff6ec" stop-opacity="0"/>
+      </radialGradient>
+      <linearGradient id="mistfill" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#d9c2cf" stop-opacity="0"/>
+        <stop offset="0.5" stop-color="#d9c2cf" stop-opacity="0.22"/>
+        <stop offset="1" stop-color="#d9c2cf" stop-opacity="0"/>
+      </linearGradient>
+      <filter id="soft" x="-10%" y="-50%" width="120%" height="200%"><feGaussianBlur stdDeviation="18"/></filter>
+    </defs>
+    <rect width="1600" height="1000" fill="url(#sky)"/>
+    <circle class="moon" cx="1170" cy="300" r="140" fill="url(#glow)"/>
+    <circle class="moon" cx="1170" cy="300" r="30" fill="#fbf4ea"/>
+    <path fill="#6a6596" d="M0 1000 L0 650 L12 642 L25 626 L38 624 L50 610 L62 616 L75 609 L88 604 L100 607 L112 611 L125 607 L138 602 L150 598 L162 594 L175 589 L188 600 L200 602 L212 594 L225 592 L238 603 L250 605 L262 602 L275 602 L288 614 L300 616 L312 613 L325 607 L338 612 L350 609 L362 605 L375 596 L388 579 L400 575 L412 580 L425 593 L438 598 L450 598 L462 592 L475 596 L488 594 L500 584 L512 588 L525 589 L538 577 L550 574 L562 568 L575 565 L588 571 L600 567 L612 564 L625 574 L638 580 L650 577 L662 571 L675 558 L688 552 L700 554 L712 552 L725 545 L738 541 L750 532 L762 521 L775 499 L788 498 L800 486 L812 483 L825 482 L838 491 L850 493 L862 494 L875 498 L888 491 L900 480 L912 493 L925 505 L938 504 L950 516 L962 512 L975 507 L988 510 L1000 516 L1012 512 L1025 518 L1038 522 L1050 519 L1062 518 L1075 508 L1088 508 L1100 519 L1112 520 L1125 530 L1138 536 L1150 536 L1162 548 L1175 551 L1188 547 L1200 548 L1212 542 L1225 548 L1238 555 L1250 554 L1262 554 L1275 565 L1288 571 L1300 587 L1312 586 L1325 587 L1338 582 L1350 576 L1362 583 L1375 580 L1388 579 L1400 566 L1412 559 L1425 564 L1438 564 L1450 556 L1462 548 L1475 546 L1488 555 L1500 557 L1512 557 L1525 565 L1538 574 L1550 585 L1562 599 L1575 608 L1588 615 L1600 613 L1600 1000 Z"/>
+    <g class="mist far"><rect x="-200" y="560" width="2000" height="120" fill="url(#mistfill)" filter="url(#soft)"/></g>
+    <path fill="#4f4b80" d="M0 1000 L0 704 L12 698 L25 700 L38 705 L50 702 L62 705 L75 706 L88 713 L100 712 L112 712 L125 716 L138 715 L150 718 L162 712 L175 714 L188 712 L200 715 L212 718 L225 729 L238 731 L250 733 L262 730 L275 735 L288 729 L300 727 L312 726 L325 722 L338 713 L350 712 L362 711 L375 707 L388 712 L400 712 L412 713 L425 708 L438 701 L450 694 L462 696 L475 694 L488 684 L500 681 L512 675 L525 676 L538 670 L550 659 L562 663 L575 659 L588 652 L600 646 L612 649 L625 646 L638 642 L650 639 L662 636 L675 638 L688 640 L700 639 L712 627 L725 614 L738 603 L750 599 L762 597 L775 595 L788 591 L800 585 L812 590 L825 601 L838 604 L850 612 L862 616 L875 625 L888 627 L900 632 L912 633 L925 633 L938 629 L950 628 L962 626 L975 629 L988 633 L1000 639 L1012 639 L1025 636 L1038 636 L1050 634 L1062 633 L1075 632 L1088 625 L1100 622 L1112 625 L1125 628 L1138 625 L1150 622 L1162 618 L1175 620 L1188 626 L1200 626 L1212 627 L1225 630 L1238 636 L1250 640 L1262 642 L1275 646 L1288 651 L1300 662 L1312 670 L1325 675 L1338 674 L1350 680 L1362 686 L1375 684 L1388 686 L1400 689 L1412 689 L1425 689 L1438 698 L1450 702 L1462 699 L1475 696 L1488 695 L1500 693 L1512 690 L1525 688 L1538 690 L1550 696 L1562 703 L1575 701 L1588 700 L1600 697 L1600 1000 Z"/>
+    <g class="mist"><rect x="-200" y="660" width="2000" height="130" fill="url(#mistfill)" filter="url(#soft)"/></g>
+    <path fill="#38366a" d="M0 1000 L0 709 L12 709 L25 706 L38 706 L50 705 L62 707 L75 707 L88 711 L100 716 L112 714 L125 712 L138 707 L150 702 L162 701 L175 700 L188 701 L200 699 L212 703 L225 704 L238 702 L250 701 L262 699 L275 697 L288 693 L300 690 L312 691 L325 696 L338 698 L350 697 L362 695 L375 691 L388 691 L400 691 L412 694 L425 693 L438 694 L450 698 L462 697 L475 695 L488 697 L500 698 L512 703 L525 705 L538 704 L550 707 L562 709 L575 707 L588 708 L600 711 L612 712 L625 714 L638 715 L650 720 L662 723 L675 727 L688 731 L700 735 L712 733 L725 732 L738 732 L750 735 L762 739 L775 739 L788 741 L800 746 L812 747 L825 749 L838 750 L850 749 L862 748 L875 750 L888 753 L900 754 L912 756 L925 754 L938 754 L950 753 L962 755 L975 757 L988 758 L1000 756 L1012 754 L1025 752 L1038 752 L1050 751 L1062 752 L1075 753 L1088 749 L1100 747 L1112 749 L1125 752 L1138 753 L1150 757 L1162 754 L1175 754 L1188 752 L1200 752 L1212 755 L1225 761 L1238 760 L1250 762 L1262 764 L1275 766 L1288 771 L1300 773 L1312 778 L1325 782 L1338 783 L1350 785 L1362 784 L1375 786 L1388 787 L1400 790 L1412 791 L1425 793 L1438 795 L1450 794 L1462 796 L1475 799 L1488 800 L1500 797 L1512 802 L1525 805 L1538 815 L1550 821 L1562 824 L1575 829 L1588 828 L1600 830 L1600 1000 Z"/>
+    <path fill="#242449" d="M0 1000 L0 830 L12 828 L25 827 L38 831 L50 831 L62 829 L75 830 L88 825 L100 822 L112 821 L125 821 L138 819 L150 818 L162 818 L175 817 L188 816 L200 818 L212 815 L225 816 L238 816 L250 815 L262 817 L275 818 L288 816 L300 815 L312 817 L325 819 L338 825 L350 829 L362 828 L375 827 L388 827 L400 830 L412 833 L425 834 L438 835 L450 835 L462 839 L475 844 L488 847 L500 848 L512 852 L525 858 L538 865 L550 870 L562 871 L575 874 L588 876 L600 877 L612 876 L625 877 L638 878 L650 880 L662 882 L675 887 L688 891 L700 894 L712 899 L725 901 L738 906 L750 907 L762 916 L775 923 L788 926 L800 931 L812 935 L825 935 L838 935 L850 933 L862 931 L875 930 L888 929 L900 926 L912 924 L925 921 L938 921 L950 918 L962 918 L975 919 L988 920 L1000 918 L1012 913 L1025 913 L1038 912 L1050 912 L1062 912 L1075 913 L1088 913 L1100 914 L1112 911 L1125 908 L1138 906 L1150 908 L1162 901 L1175 897 L1188 892 L1200 890 L1212 891 L1225 889 L1238 887 L1250 886 L1262 886 L1275 890 L1288 888 L1300 888 L1312 888 L1325 888 L1338 884 L1350 882 L1362 880 L1375 877 L1388 870 L1400 864 L1412 860 L1425 857 L1438 858 L1450 855 L1462 855 L1475 854 L1488 856 L1500 859 L1512 859 L1525 858 L1538 858 L1550 860 L1562 862 L1575 867 L1588 866 L1600 867 L1600 1000 Z"/>
+  </svg>
+  <p class="wallpaper-credit">Quiet Ridges · demo library</p>
+  <div class="caption">
+    <div class="wrap">
+      <div>
+        <h1 class="name"><img src="images/rinka.svg" alt="">Rinka</h1>
+        <p class="tagline">A wallpaper engine for Niri and Hyprland.</p>
       </div>
-      <p class="meta">Rust + wgpu · WebGPU preview · GPL-3.0-or-later · early and moving fast</p>
-    </div>
-    <div class="shot">
-      <img src="images/wallpaper.jpg" width="1600" height="1000" alt="The Rinka editor showing a mountain wallpaper full-window, with a map of three monitors to apply it to.">
+      <div class="quick">
+        <div class="cmd"><pre><code>nix run github:zaroc-dev/rinka</code></pre><button class="copy" type="button">Copy</button></div>
+        <nav aria-label="Page">
+          <a href="#install">Install</a>
+          <a href="#status">Status</a>
+          <a href="https://github.com/zaroc-dev/rinka">Source</a>
+        </nav>
+      </div>
     </div>
   </div>
 </header>
 
 <main>
-  <section id="features">
+  <section>
     <div class="wrap">
-      <p class="kicker">What it does</p>
-      <h2>One engine for your desktop and your preview.</h2>
-      <p class="section-lede">The renderer is written once in Rust. Natively it draws on Wayland layer-shell surfaces; compiled to WebAssembly it draws the editor's preview through WebGPU.</p>
-      <div class="features">
-        <div class="feature">
-          <h3>Identical colors, checked</h3>
-          <p>Preview and wallpaper share one color pipeline, video YUV conversion included. Test frames read back byte-for-byte equal on both paths.</p>
-          <span class="fact">#1e6f73 → rgb(30, 111, 115) on screen</span>
-        </div>
-        <div class="feature">
-          <h3>Wallpaper Engine scenes, honestly</h3>
-          <p>Rinka reads workshop packages, converts image layers and translates effect shaders to WGSL. Each import comes with a report of what converted, what is approximated and what is missing.</p>
-          <span class="fact">264 of 277 effect shaders translate</span>
-        </div>
-        <div class="feature">
-          <h3>Video that keeps time</h3>
-          <p>FFmpeg decodes, frames are scheduled by their timestamps, variable frame rates play as authored, and hidden outputs stop costing anything.</p>
-          <span class="fact">frames within 1.1 ms of their timestamps</span>
-        </div>
-        <div class="feature">
-          <h3>Every monitor, its own wallpaper</h3>
-          <p>Pick displays on a to-scale map of your outputs. Rotated and mixed-resolution setups get correctly sized buffers, and the wallpaper never takes your clicks.</p>
-          <span class="fact">background layer · no input · no focus</span>
-        </div>
-      </div>
+      <p class="intro">Rinka plays <strong>images, videos and Wallpaper Engine scenes</strong> behind your windows. The renderer is written once in Rust: it draws your monitors natively, and the editor's preview runs the same code in WebGPU, so the preview shows what the monitors will.</p>
+      <figure>
+        <img src="images/wallpaper.jpg" width="1600" height="1000" alt="The Rinka editor showing a mountain wallpaper full-window, with a map of three monitors to apply it to.">
+        <figcaption>The editor with a wallpaper open, choosing which of three monitors shows it.</figcaption>
+      </figure>
     </div>
   </section>
 
   <section>
-    <div class="wrap split">
-      <div>
-        <p class="kicker">The library</p>
-        <h2>Your wallpapers, in one place.</h2>
-        <p class="section-lede">Drop in images and videos, pick solid colors, or import from your Wallpaper Engine workshop. Thumbnails come from the engine itself, so they match what plays.</p>
-      </div>
-      <div class="shot">
-        <img src="images/library.jpg" width="1600" height="1000" loading="lazy" alt="The Rinka library: a grid of wallpaper thumbnails with filters for images, videos, scenes and colors.">
-      </div>
+    <div class="wrap col">
+      <h2>What it plays</h2>
+      <dl class="list">
+        <dt>Colors and images</dt>
+        <dd>Fill, fit, stretch, center or tile, per monitor. Rotated and mixed-resolution layouts get buffers at their real size.</dd>
+        <dt>Video</dt>
+        <dd>Decoded with FFmpeg and shown at each frame's timestamp, variable frame rates included. Measured within 1.1 ms of the timestamps.</dd>
+        <dt>Wallpaper Engine scenes</dt>
+        <dd>Converted from your workshop folder into Rinka projects: image layers, transforms and effect shaders translated to WGSL. Each import lists what converted, what is approximate and what is missing, and nothing missing is dropped without asking.</dd>
+        <dt>Many monitors</dt>
+        <dd>Each output gets its own wallpaper, picked on a to-scale map. Wallpapers never take clicks or focus and keep playing when the editor is closed.</dd>
+      </dl>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap col">
+      <h2>Costs nothing when nothing moves</h2>
+      <p class="soft">A still wallpaper is drawn once and then left alone; there is no render loop. Animation runs only where something animates, and the tray icon pauses all of it, keeping the current frame on screen. Video stops when the compositor stops showing it; on Windows, a monitor covered by windows stops too.</p>
+      <p class="soft">Colors go through one pipeline on both paths. A test color written as <code>#1e6f73</code> reads back as <code>rgb(30, 111, 115)</code> from the screen and from the preview.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <figure>
+        <img src="images/library.jpg" width="1600" height="720" loading="lazy" alt="The Rinka library: a grid of wallpaper thumbnails with filters for images, videos, scenes and colors.">
+        <figcaption>The library. Thumbnails are rendered by the engine, so they match what plays.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section id="status">
+    <div class="wrap col">
+      <h2>Status</h2>
+      <p class="soft">Rinka is a young personal project. This is what has been measured, not what is hoped for.</p>
+      <table>
+        <thead><tr><th>Area</th><th>State</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td>Niri</td><td><span class="state ok">works</span></td><td class="soft">Colors, images, video and scenes, used daily.</td></tr>
+          <tr><td>Hyprland</td><td><span class="state partial">untested</span></td><td class="soft">Uses the same layer-shell protocol; expected to work.</td></tr>
+          <tr><td>Windows</td><td><span class="state partial">experimental</span></td><td class="soft">Colors, images and scenes behind the desktop icons. No video yet; build from source.</td></tr>
+          <tr><td>Scene import</td><td><span class="state partial">partial</span></td><td class="soft">Of 33 scenes measured, <span class="num">1</span> converts fully and <span class="num">1</span> partly; <span class="num">264</span> of <span class="num">277</span> effect shaders translate.</td></tr>
+          <tr><td>Particles</td><td><span class="state no">next</span></td><td class="soft">Used by <span class="num">28</span> of the <span class="num">33</span> scenes, so most imports wait on this.</td></tr>
+          <tr><td>Text, sound, scripts</td><td><span class="state no">planned</span></td><td class="soft">SceneScript, audio-reactive values and text layers.</td></tr>
+          <tr><td>Layer editor</td><td><span class="state no">planned</span></td><td class="soft">Reorder, hide and adjust layers of a scene with a live preview.</td></tr>
+        </tbody>
+      </table>
+      <p class="muted" style="margin-top: 14px; font-size: 15px;">Measurements behind each line are in the <a href="https://github.com/zaroc-dev/rinka/tree/main/docs">milestone notes</a>.</p>
     </div>
   </section>
 
   <section id="install">
-    <div class="wrap">
-      <p class="kicker">Install</p>
-      <h2>Try it in one command.</h2>
-      <p class="section-lede">Rinka ships as a Nix flake. It needs a Wayland compositor with wlr-layer-shell (Niri and Hyprland are the tested targets) and a GPU with Vulkan.</p>
-      <div class="steps">
-        <div class="step">
-          <div><h3>Run it</h3><p>Opens the editor; it starts the wallpaper host on its own.</p></div>
-          <div class="code"><pre><code>nix run github:zaroc-dev/rinka</code></pre><button class="copy" type="button">Copy</button></div>
-        </div>
-        <div class="step">
-          <div><h3>Keep it</h3><p>With Home Manager, the host starts at login and restores the wallpapers you picked.</p></div>
-          <div class="code"><pre><code><span class="c"># flake.nix</span>
+    <div class="wrap col">
+      <h2>Install</h2>
+      <p class="soft">Rinka is a Nix flake. It needs a Wayland compositor with wlr-layer-shell and a GPU with Vulkan.</p>
+
+      <h3>Try it</h3>
+      <p class="soft">Opens the editor, which starts the wallpaper host.</p>
+      <div class="code"><pre><code>nix run github:zaroc-dev/rinka</code></pre><button class="copy" type="button">Copy</button></div>
+
+      <h3>Keep it, with Home Manager</h3>
+      <p class="soft">The host starts at login and brings back the wallpapers you picked.</p>
+      <div class="code"><pre><code><span class="c"># flake.nix</span>
 inputs.rinka.url = "github:zaroc-dev/rinka";
 
 <span class="c"># home.nix</span>
 imports = [ inputs.rinka.homeManagerModules.default ];
 services.rinka.enable = true;</code></pre><button class="copy" type="button">Copy</button></div>
-        </div>
-        <div class="step">
-          <div><h3>Without Home Manager</h3><p>Add the package and start the host with your compositor, for example in Niri.</p></div>
-          <div class="code"><pre><code>spawn-at-startup "rinka-host" "serve" "--restore"</code></pre><button class="copy" type="button">Copy</button></div>
-        </div>
-      </div>
-    </div>
-  </section>
 
-  <section id="status">
-    <div class="wrap">
-      <p class="kicker">Status</p>
-      <h2>What works today, and what is next.</h2>
-      <p class="section-lede">Rinka is young. Its milestones come from a written spec, and import priorities come from measuring real workshop scenes rather than guessing.</p>
-      <div class="status">
-        <div class="row"><span class="state done">Works</span><div><h3>Colors, images, video</h3><p>Fit, fill, stretch, center and tile; looping video with pause and seek; per-display assignment.</p></div></div>
-        <div class="row"><span class="state done">Works</span><div><h3>Scene import with effects</h3><p>Image layers, transforms and translated effect shaders such as water ripple and shake, with a conversion report.</p></div></div>
-        <div class="row"><span class="state next">Next</span><div><h3>Particles, solid and composition layers</h3><p>Particles appear in 28 of 33 measured scenes; solid and composition layers in 13 each.</p></div></div>
-        <div class="row"><span class="state later">Later</span><div><h3>Text, sound, scripts, Windows</h3><p>SceneScript, audio response and Windows wallpaper playback are planned as separate steps.</p></div></div>
-      </div>
+      <h3>Without Home Manager</h3>
+      <p class="soft">Add the package and start the host from your compositor, for example in Niri:</p>
+      <div class="code"><pre><code>spawn-at-startup "rinka-host" "serve" "--restore"</code></pre><button class="copy" type="button">Copy</button></div>
+
+      <h3>Windows</h3>
+      <p class="soft">There is no installer yet. Building from source and the current limits are described in the <a href="https://github.com/zaroc-dev/rinka/blob/main/docs/windows-host.md">Windows notes</a>.</p>
     </div>
   </section>
 </main>
 
 <footer>
   <div class="wrap">
-    <span>Rinka · GPL-3.0-or-later · not affiliated with Wallpaper Engine</span>
+    <span>Rinka is free software under the GPL-3.0-or-later. It is not affiliated with Wallpaper Engine.</span>
     <a href="https://github.com/zaroc-dev/rinka">github.com/zaroc-dev/rinka</a>
   </div>
 </footer>
@@ -342,13 +330,13 @@ services.rinka.enable = true;</code></pre><button class="copy" type="button">Cop
 <script>
   for (const button of document.querySelectorAll(".copy")) {
     button.addEventListener("click", async () => {
-      const text = button.previousElementSibling.innerText;
+      const code = button.previousElementSibling;
       try {
-        await navigator.clipboard.writeText(text);
+        await navigator.clipboard.writeText(code.innerText);
         button.textContent = "Copied";
       } catch {
         const range = document.createRange();
-        range.selectNodeContents(button.previousElementSibling);
+        range.selectNodeContents(code);
         getSelection().removeAllRanges();
         getSelection().addRange(range);
         button.textContent = "Selected";
