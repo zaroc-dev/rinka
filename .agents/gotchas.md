@@ -159,5 +159,11 @@ something costs more than a few minutes.
   (the stage frame was 2 px tall).
 - **Preact 11 `useRef` needs an initial value**; ARIA roles are type-checked
   per element.
+- **Tray menu item ids change on every rebuild.** Electron rebuilds the
+  dbusmenu on `setContextMenu`; when clicking items over D-Bus in tests
+  (`com.canonical.dbusmenu.Event`), read the layout again first.
+- **Unix socket paths are limited to ~108 bytes.** An isolated test editor
+  with `XDG_RUNTIME_DIR` in the scratch directory cannot start its host;
+  use a short runtime directory.
 - **`cargo fmt` rewraps code.** Patch scripts that match exact text break
   after formatting; re-read the file or match with a regex.

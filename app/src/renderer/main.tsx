@@ -1,6 +1,6 @@
 import { render } from "preact";
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
-import type { AppInfo, HostState, LibraryEntry, OutputInfo, Project, RinkaApi } from "../shared/api";
+import type { AppInfo, AppSettings, HostState, LibraryEntry, OutputInfo, Project, RinkaApi } from "../shared/api";
 import { BackIcon, CloseIcon, GearIcon, ImportIcon, PlusIcon, SearchIcon } from "./icons";
 import { type Filter, Library, SORTS, type Sort, VIEW_MODES, type ViewMode } from "./library";
 import { onPreviewStatus, previewStatus, startPreview } from "./preview";
@@ -274,9 +274,11 @@ function App() {
 
 function Settings({ host, outputs, onClose }: { host: HostState; outputs: OutputInfo[]; onClose(): void }) {
   const [info, setInfo] = useState<AppInfo | null>(null);
+  const [settings, setSettings] = useState<AppSettings | null>(null);
   const [preview, setPreview] = useState(previewStatus());
   useEffect(() => {
     void api.appInfo().then(setInfo);
+    void api.appSettings().then(setSettings);
     return onPreviewStatus(setPreview);
   }, []);
   useEffect(() => {
@@ -320,6 +322,15 @@ function Settings({ host, outputs, onClose }: { host: HostState; outputs: Output
               </>
             )}
           </dl>
+          {host.state === "connected" && (
+            <label class="check">
+              <input type="checkbox" checked={host.paused} onChange={(e) => void api.setPaused(e.currentTarget.checked)} />
+              <span>
+                Pause animation
+                <span class="muted small">Wallpapers keep their current frame and use no GPU time.</span>
+              </span>
+            </label>
+          )}
           {host.state === "connected" ? (
             <button type="button" class="button danger" onClick={() => void api.stopHost()}>
               Stop host and remove wallpapers
@@ -376,6 +387,22 @@ function Settings({ host, outputs, onClose }: { host: HostState; outputs: Output
               </>
             )}
           </dl>
+        </section>
+
+        <section class="sheet-section">
+          <h3>Tray</h3>
+          <label class="check">
+            <input
+              type="checkbox"
+              checked={settings?.trayIcon ?? true}
+              disabled={!settings}
+              onChange={(e) => void api.setAppSettings({ trayIcon: e.currentTarget.checked }).then(setSettings)}
+            />
+            <span>
+              Show tray icon
+              <span class="muted small">Closing this window keeps Rinka in the tray. Without it, closing quits the editor.</span>
+            </span>
+          </label>
         </section>
 
         <section class="sheet-section">

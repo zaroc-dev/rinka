@@ -241,6 +241,8 @@ export interface Config {
   version: 1;
   /** Output name -> library id. */
   assignments: Record<string, string>;
+  /** Show the tray icon (default true). */
+  trayIcon?: boolean;
 }
 
 export class ConfigStore {

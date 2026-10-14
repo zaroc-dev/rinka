@@ -80,7 +80,16 @@ export interface OutputInfo {
 
 export type HostState =
   | { state: "connecting" }
-  | { state: "connected"; pid: number; protocol: number; hostVersion: string; gpu: string; compositor: string | null }
+  | {
+      state: "connected";
+      pid: number;
+      protocol: number;
+      hostVersion: string;
+      gpu: string;
+      compositor: string | null;
+      /** Wallpaper animation is paused; the last frame stays on screen. */
+      paused: boolean;
+    }
   | { state: "stopped" }
   | { state: "unavailable"; reason: string };
 
@@ -140,6 +149,12 @@ export interface WorkshopScan {
   items: WorkshopItem[];
 }
 
+/** Editor settings stored in config.json. */
+export interface AppSettings {
+  /** Show the tray icon; closing the window then hides it to the tray. */
+  trayIcon: boolean;
+}
+
 export interface AppInfo {
   libraryPath: string;
   electron: string;
@@ -149,6 +164,8 @@ export interface AppInfo {
 /** API exposed to the renderer by the preload script as `window.rinka`. */
 export interface RinkaApi {
   appInfo(): Promise<AppInfo>;
+  appSettings(): Promise<AppSettings>;
+  setAppSettings(patch: Partial<AppSettings>): Promise<AppSettings>;
   listProjects(): Promise<LibraryEntry[]>;
   createColor(title: string, color: string): Promise<LibraryEntry>;
   /**
@@ -175,6 +192,8 @@ export interface RinkaApi {
   assign(output: string | null, id: string): Promise<void>;
   unassign(output: string | null): Promise<void>;
   onHostState(listener: (state: HostState) => void): void;
+  /** Stops or continues wallpaper animation on every display. */
+  setPaused(paused: boolean): Promise<HostState>;
 
   reportPreview(report: PreviewReport): void;
 }
