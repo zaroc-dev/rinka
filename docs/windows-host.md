@@ -25,6 +25,16 @@ only pumps messages, because Windows links its input queue to Explorer's
 desktop thread; loading, decoding, scene building and presenting run on the
 render thread.
 
+Animation stops on monitors that other windows cover completely; the last
+frame stays on screen and the scene continues from its clock when
+uncovered. The window thread reads the window stack (top-level windows above
+Explorer's desktop, skipping invisible, minimized, cloaked, click-through
+and translucent layered windows) after WinEvent hooks report a change,
+coalesced over 100 ms, and polls once a second while a monitor counts as
+covered. Translucent windows that are not layered (acrylic, Mica) count as
+covering, so the wallpaper behind them freezes. `outputs` reports
+`surface.visible`; `capabilities` reports `visibility_pause: true`.
+
 Video projects are rejected explicitly. Scene animation uses the engine's
 scene clock and a waitable timer at 30 fps. Static wallpapers leave the
 message loop waiting without a periodic render timer. Rendering errors reach
@@ -76,8 +86,10 @@ interval. It does not connect to the user's normal host pipe.
 - Actual animated-scene pacing, Explorer restart recovery, display hotplug,
   DPI changes, focus/input behavior and the classic WorkerW layout.
 - DX12 presentation. The measured host selected Vulkan.
-- Hidden/covered/powered-off animation pausing (issue #3). Capabilities
-  report `visibility_pause: false`; animated scenes continue to tick.
+- Covered-monitor pausing (issue #3) is implemented but not measured on
+  Windows: GPU time with a maximized window or a fullscreen game, and how
+  quickly a scene resumes. Powered-off displays and the lock screen do not
+  pause yet.
 - Review changes after the first measurements (window thread, re-placing
   windows on display changes, pipe access list) compile and pass Clippy for
   `x86_64-pc-windows-msvc` but have not run on Windows yet.

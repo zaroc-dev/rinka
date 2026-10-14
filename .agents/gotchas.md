@@ -104,6 +104,12 @@ something costs more than a few minutes.
 - **Window positions are relative to Explorer's desktop window.** It moves
   when the virtual screen's origin changes, so re-place every wallpaper
   window on `WM_DISPLAYCHANGE`, not only those whose monitor moved.
+- **`GetWindowRect` includes invisible resize borders.** Use
+  `DWMWA_EXTENDED_FRAME_BOUNDS` for what a window actually covers, and skip
+  cloaked windows (`DWMWA_CLOAKED`): windows on other virtual desktops are
+  "visible" to `IsWindowVisible`.
+- **Coverage by piece size misjudges.** Subtracting window rectangles splits
+  one visible region into many thin pieces; decide on total visible area.
 - **The default pipe security lets Everyone read.** Pass an explicit
   descriptor (current user and SYSTEM) to `CreateNamedPipeW`.
 - **Shutdown replies need delivery coordination.** The host waits (bounded)
