@@ -19,7 +19,7 @@ flowchart TD
 
 | Crate | Role | Platform code |
 | --- | --- | --- |
-| `rinka-engine` | Project model (`project.rs`), color (`color.rs`), image decoding (`image.rs`), video conversion (`video.rs`), GPU profile and surfaces (`gpu.rs`), renderer (`render.rs`), scenes and effect passes (`scene.rs`), offscreen capture (`capture.rs`) | none |
+| `rinka-engine` | Project model (`project.rs`), color (`color.rs`), image decoding (`image.rs`), video conversion (`video.rs`), GPU profile and surfaces (`gpu.rs`), renderer (`render.rs`), scenes and effect passes (`scene.rs`), particle format and simulation (`particles.rs`), offscreen capture (`capture.rs`) | none |
 | `rinka-wasm` | wasm-bindgen wrapper: `Preview` (canvas surface, asset cache, video frames, scenes), `decodeImage`/`decodeImageRaw` for the worker | browser only (`#![cfg(target_arch = "wasm32")]`) |
 | `rinka-host` | `serve` (Wayland/Win32 presenter + control endpoint), `import`, `thumbnail`, `preview` (winit window), `video-timing`, `info` | Linux: Wayland, FFmpeg; Windows: Explorer child windows, named pipe (no video yet) |
 | `rinka-import` | Wallpaper Engine: `pkg.rs`, `tex.rs`, `preprocess.rs`, `shader.rs`, `value.rs`, `assets.rs`, `convert.rs`, `report.rs` | none |
@@ -44,9 +44,14 @@ A project is a directory with `project.json` and its assets:
   tile are 1:1 device pixels).
 - `scene`: canvas `width`/`height`, `fit`, `clear_color`, `color_space: gamma`,
   `layers` (bottom to top: texture, origin (center, y down), size, scale,
-  angle (clockwise, radians), color, alpha, brightness, blend, effects),
-  `textures` (path → clamp/nearest), `shaders` (id → WGSL vertex/fragment
-  paths, reflected uniform layout, texture slots).
+  angle (clockwise, radians), color, alpha, brightness, blend, effects,
+  optional `particles`), `textures` (path → clamp/nearest), `shaders` (id →
+  WGSL vertex/fragment paths, reflected uniform layout, texture slots).
+- A layer with `particles` is a particle system (`particles.rs`): max count,
+  start time, seed, emitters (disk or box), initializers, operators,
+  renderer (sprite or trail), optional sprite sheet. Its texture is the
+  sprite; origin, scale and angle place the system; `size` is unused. Local
+  space is canvas pixels with y down.
 - Asset paths are relative, `/`-separated, validated (`check_asset_path`); the
   host also refuses symlinks leaving the project.
 - Unknown fields are rejected (`deny_unknown_fields`). Newer versions error
@@ -79,6 +84,12 @@ holds `{version: 1, assignments: {output: projectId}}`; the library is
   `Rgba8Unorm` buffers (≤4096 px); slot 0 is the previous result. Effect
   uniforms are filled by name from the reflected layout: material values once,
   `g_Time` each frame, `g_TextureNResolution`, identity MVP, centered pointer.
+- Particle layers: each frame the layer's `Simulation` advances in fixed
+  1/60 s steps to the scene time (seeded, `libm` math, so native and
+  preview agree; going back replays, jumps over 30 s restart 30 s before),
+  then every particle becomes one instance (clip-space center, two axes,
+  color, two sprite-sheet frame rectangles and a blend) drawn as a
+  triangle-strip quad with the layer's blend.
 
 ## Host (`rinka-host serve`)
 
@@ -162,9 +173,12 @@ continue from there on `resume`. Assignments made while paused start paused.
    then the install's `assets`.
 3. Decode textures to PNG (cropped, GL channel meaning, first sprite frame).
 4. Convert objects. Image layers go through model → material
-   (`genericimage*`), with parent transforms composed and y flipped. Particles,
-   text, sound, models, lights and composition layers are reported
-   unsupported.
+   (`genericimage*`), with parent transforms composed and y flipped. Solid
+   layers (`flat`) become a white 1×1 texture tinted with the object's
+   color. Particle objects become one particle layer per system plus static
+   children (`rinka-import/src/particles.rs`, sources in
+   `docs/m4-particles.md`). Text, sound, models, lights and composition
+   layers are reported unsupported.
 5. For each effect pass: merge material and scene overrides; combos from
    defaults, material, scene and provided textures; translate (cached by
    shader + combos).

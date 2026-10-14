@@ -132,6 +132,8 @@ something costs more than a few minutes.
   y up; the engine's turn clockwise with y down.
 - **Values come in several forms**: numbers, `"x y z"` strings, and
   `{value, user|script|animation}` wrappers. Use `value.rs`.
+- **`TEXB0003` can hold an MP4** (flag 0x20, no is-MP4 field). Detect it by
+  the `ftyp` box, not the container version, or it decodes as grey noise.
 
 ## Shader translation (naga GLSL frontend)
 
@@ -147,6 +149,27 @@ something costs more than a few minutes.
 - **HLSL-isms**: `max(0, v)` (swapped), implicit vector truncation (not fixed;
   `shimmer` fails), unguarded headers (include once).
 - **Shaders use `common.h` without including it.** It is always included.
+- **naga misplaces errors for scalar-to-swizzle assignments.** `c.rgb =
+  greyscale(c.rgb)` (legal HLSL) fails with "InvalidAccess … indexed" at an
+  unrelated line. Swizzle assignments go through `rinka_castN`; when an
+  error points at innocent code, bisect the shader instead of trusting the
+  location.
+
+## Particles
+
+- **Particle definitions are y up.** Rain spawns at `origin 0 768` and falls
+  with velocity `0 -3000`. Mirror every vector's y on import, swap range ends,
+  and keep rotation angles as they are (the sprite-axis formula mirrors).
+- **`sizerandom` is twice the sprite width.** Both open implementations pass
+  half of it to Wallpaper Engine's particle shader, which draws that as the
+  width; Moon Touch's glows only match the workshop preview at half.
+- **Docs and implementations disagree on oscillation frequency.** The docs
+  say oscillations per particle life; linux-wallpaperengine and
+  wallpaper-scene-renderer use radians per second. Rinka follows the docs;
+  verify on Windows against Wallpaper Engine.
+- **The open implementations are GPL-2.0 (wallpaper-scene-renderer) and
+  GPL-3.0 (linux-wallpaperengine).** Read them for defaults, do not copy
+  code.
 
 ## Editor UI
 

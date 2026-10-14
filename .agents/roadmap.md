@@ -10,7 +10,7 @@ Status as of 2026-10-14. Measurements behind each line are in `docs/`.
 | M1 | Images: fits, background color, library, thumbnails | Done on Niri |
 | M2 | FFmpeg video: PTS timing, loop, pause/seek, preview decode path | Done on Niri |
 | M3 | Wallpaper Engine scene import + project layer editor + project stacks | Import partly done; editor and stacks not started |
-| M4 | Compatibility from measured failures: particles, multi-pass, animation, scripts, audio | Not started |
+| M4 | Compatibility from measured failures: particles, multi-pass, animation, scripts, audio | Particles v1 and solid layers done (`docs/m4-particles.md`) |
 | M5 | Broader editing, packaging, more desktops | Not started |
 
 Gates from the original spec still apply: M0 needs Niri **and** Hyprland;
@@ -27,28 +27,29 @@ unexplained mismatch on validated scenes.
 - Import (36 local workshop items: 33 scenes, 2 videos, 1 web):
   - all 564 packaged and 311 built-in textures decode;
   - 264 of 277 effect shader pairs translate;
-  - scenes: 1 fully supported (Crimson Sun), 1 partial (Elden Ring Ranni,
-    sprite sheet shows first frame), 31 blocked; both videos convert fully.
+  - scenes: 2 fully supported (Crimson Sun, 4K & 2K Aurora Lake), 2 partial
+    (Elden Ring Ranni: sprite-sheet layer shows its first frame; 布吉岛-樱落:
+    perspective particles drawn flat), 29 blocked; both videos convert fully.
     (Before 2026-10-14 this read "3 fully supported", counting the videos.)
+  - particle objects: 100 supported, 111 partial, 28 unsupported.
 - Crimson Sun native: ~28 fps, ~2 ms CPU per frame, 507 MiB GPU.
 
 ## Blockers by scenes affected
 
 | Feature | Scenes | Notes |
 | --- | --- | --- |
-| Particles | 28 | 338 systems (99 of them children); census below |
+| Particles, remaining parts | 22 | `controlpointattract` 54 objects, perspective 39, per-particle children 46, rope renderers 27 |
 | Sound | 13 | Playback plus audio-reactive values |
 | Multi-buffer effects | 11 | Effects with named FBOs between passes |
 | `composelayer` layer shader | 10 | 13 layers |
 | Untranslatable shaders | 9 | 13 pairs; e.g. HLSL implicit truncation |
 | Text | 7 | 37 layers |
 | Camera parallax, bloom | 6 each | Scene-level settings |
-| `flat` layer shader | 4 | 13 layers (earlier listed as 13 scenes) |
+| Video textures on layers | 2 | MP4 inside `.tex`; was decoded as noise before 2026-10-14 |
 | Composition layers (effects on everything below) | 4 | |
 
-Scenes blocked by one feature only: particles 3, text 1, sprite sheets 1.
-Particles plus sound would fully convert 5 more; nothing short of
-particles converts more than 2.
+Solid (`flat`) layers and particles v1 landed on 2026-10-14; the census
+below is what they were sized from.
 
 ### Particle census (2026-10-14, 28 scenes)
 
@@ -69,16 +70,16 @@ Values: 162 scripted, 20 animated, 161 user-bound (all use static values now).
 
 ## Next, in order
 
-1. **Particles v1** (census above): the gate for 28 of 33 scenes. Needs a
-   deterministic simulation that can seek.
-2. **Sound playback**: with particles, fully converts 5 more scenes.
-3. **Solid-color and composition layers** (`flat`, `composelayer`): cheap,
-   but in 4 and 10 scenes, all also blocked by other features.
-4. **Multi-buffer effects**: named intermediate buffers, correct sizing
-   (current effect buffer sizing is approximate).
+1. **Sound playback** (#16): 13 scenes use it.
+2. **Particle follow-ups**: control points (cursor attraction), per-particle
+   child systems, perspective particles, rope renderers.
+3. **Text layers**: 7 scenes; Moon Touch's remaining difference.
+4. **Composition layers** (`composelayer`) and **multi-buffer effects**:
+   10 and 11 scenes.
 5. **M3 editor**: layer list (reorder, hide, transform, configure) with live
    preview; save and reopen; then project stacks per output.
-6. Text, SceneScript, animated values, user properties in the UI.
+6. Video textures on layers, SceneScript, animated values, user properties
+   in the UI.
 
 Reordered on 2026-10-14 after recounting by scene instead of by layer; the
 earlier order put solid and composition layers first on a count of 13
