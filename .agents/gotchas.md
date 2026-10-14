@@ -90,10 +90,22 @@ something costs more than a few minutes.
   declares layered-child support and per-monitor DPI awareness.
 - **Disconnected pipe instances need resetting.** A client can close before
   `ConnectNamedPipe`, leaving `ERROR_NO_DATA`; disconnect that instance before
-  accepting again or the listener spins.
+  accepting again or the listener spins. The shared accept loop also backs
+  off after repeated failures.
 - **Recovery must schedule its own wakeup.** A failed Explorer rebuild sets a
   new retry deadline; include it in the timer after rebuilding. Clear frame
   deadlines for destroyed windows to avoid drawing against null HWNDs.
+- **Wallpaper windows link our thread to Explorer's.** Child windows of
+  another process's window share an input queue with it. If the thread
+  owning them blocks (image decode, scene build, a vsync wait), Explorer's
+  desktop stops responding. Only the window thread (`win32/ui.rs`) owns
+  windows; create children with `WS_EX_NOPARENTNOTIFY` so creation never
+  waits on Explorer.
+- **Window positions are relative to Explorer's desktop window.** It moves
+  when the virtual screen's origin changes, so re-place every wallpaper
+  window on `WM_DISPLAYCHANGE`, not only those whose monitor moved.
+- **The default pipe security lets Everyone read.** Pass an explicit
+  descriptor (current user and SYSTEM) to `CreateNamedPipeW`.
 - **Shutdown replies need delivery coordination.** The host waits (bounded)
   for the pipe thread to flush the reply before process exit; a fixed sleep
   races the client thread.

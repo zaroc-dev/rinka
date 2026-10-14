@@ -99,12 +99,29 @@ holds `{version: 1, assignments: {output: projectId}}`; the library is
 
 ## Control protocol (v1)
 
-Windows uses `\\.\pipe\rinka-host-<USERNAME>` with the same protocol. Its
-presenter creates one input-transparent, nonactivating Explorer child window
-per monitor, measured in physical pixels. Static targets render on change;
-scene animation uses a waitable timer. Assignments survive disconnection,
-and shell restart/display broadcasts trigger rebuilding. See
+Windows uses `\\.\pipe\rinka-host-<USERNAME>` with the same protocol; the
+pipe's access list admits only the current user and SYSTEM. Its presenter
+creates one input-transparent, nonactivating Explorer child window per
+monitor, measured in physical pixels. Static targets render on change; scene
+animation uses a waitable timer. Assignments survive disconnection, and
+shell restart/display broadcasts trigger rebuilding. See
 `docs/windows-host.md` for measured behavior and unverified recovery checks.
+
+Source layout of `rinka-host serve`: `main.rs` picks the platform presenter
+as `desktop` (`wayland.rs` or `win32/`), both with `run(endpoint,
+assignments)`. `control/` holds the shared client loop (`mod.rs`) and one
+transport per platform (`unix.rs`, `pipe.rs`) behind a `Listener` trait.
+`restore.rs` reads the editor's assignments. `win32/` is split into the
+render loop (`mod.rs`), the window thread (`ui.rs`), Explorer's desktop
+(`desktop.rs`), monitors (`monitor.rs`) and the timer and wake event
+(`timer.rs`). Platform differences are chosen per module or per item, not
+with `cfg` inside function bodies.
+
+The Windows host runs two threads. The window thread owns every window and
+only pumps messages and runs short window calls (`Ui::call`, a synchronous
+`SendMessageW`); the render thread loads, renders and presents. Explorer's
+desktop thread shares an input queue with whichever thread owns the
+wallpaper windows, so nothing slow may run there.
 
 Newline-delimited JSON on `$XDG_RUNTIME_DIR/rinka/host.sock`. Each request
 `{"id", "cmd", …}` gets one response `{"id", "ok", "result" | "error": {code,

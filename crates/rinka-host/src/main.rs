@@ -12,14 +12,23 @@ mod project_io;
 mod protocol;
 mod thumbnail;
 
+// Wallpaper playback (`serve`). The control endpoint and restore logic are
+// shared; `desktop` is this platform's presenter, with
+// `run(endpoint, assignments)`.
 #[cfg(any(target_os = "linux", windows))]
 mod control;
+#[cfg(any(target_os = "linux", windows))]
+mod restore;
 #[cfg(target_os = "linux")]
 mod video;
 #[cfg(target_os = "linux")]
 mod wayland;
+#[cfg(target_os = "linux")]
+use wayland as desktop;
 #[cfg(windows)]
 mod win32;
+#[cfg(windows)]
+use win32 as desktop;
 
 #[derive(Parser)]
 #[command(version, about)]
@@ -138,73 +147,26 @@ fn load_with_image(dir: &std::path::Path) -> anyhow::Result<preview::Loaded> {
 }
 
 #[cfg(any(target_os = "linux", windows))]
-fn serve(socket: Option<PathBuf>, restore: Option<Option<PathBuf>>) -> anyhow::Result<()> {
-    let socket = match socket {
-        Some(s) => s,
-        None => control::default_socket_path()?,
+fn serve(endpoint: Option<PathBuf>, restore: Option<Option<PathBuf>>) -> anyhow::Result<()> {
+    let endpoint = match endpoint {
+        Some(e) => e,
+        None => control::default_endpoint()?,
     };
     let assignments = match restore {
         None => Default::default(),
         Some(dir) => {
             let dir = match dir {
                 Some(dir) => dir,
-                None => default_data_dir()?,
+                None => restore::default_data_dir()?,
             };
-            saved_assignments(&dir)
+            restore::saved_assignments(&dir)
         }
     };
-    #[cfg(target_os = "linux")]
-    {
-        wayland::run(socket, assignments)
-    }
-    #[cfg(windows)]
-    {
-        win32::run(socket, assignments)
-    }
-}
-
-/// The editor's data directory: `$XDG_CONFIG_HOME/rinka` or `~/.config/rinka`.
-#[cfg(target_os = "linux")]
-fn default_data_dir() -> anyhow::Result<PathBuf> {
-    let config = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
-        .context("neither XDG_CONFIG_HOME nor HOME is set")?;
-    Ok(config.join("rinka"))
-}
-
-/// Matches Electron's `appData/rinka` directory on Windows.
-#[cfg(windows)]
-fn default_data_dir() -> anyhow::Result<PathBuf> {
-    let config = std::env::var_os("APPDATA").context("APPDATA is not set")?;
-    Ok(PathBuf::from(config).join("rinka"))
-}
-
-/// Output → project directory, from the editor's `config.json`.
-#[cfg(any(target_os = "linux", windows))]
-fn saved_assignments(dir: &std::path::Path) -> std::collections::HashMap<String, PathBuf> {
-    #[derive(serde::Deserialize)]
-    struct Config {
-        assignments: std::collections::HashMap<String, String>,
-    }
-    let path = dir.join("config.json");
-    match std::fs::read_to_string(&path).map(|t| serde_json::from_str::<Config>(&t)) {
-        Ok(Ok(config)) => config
-            .assignments
-            .into_iter()
-            .filter(|(_, id)| !id.contains(['/', '\\']) && !id.starts_with('.'))
-            .map(|(output, id)| (output, dir.join("projects").join(id)))
-            .collect(),
-        Ok(Err(e)) => {
-            log::warn!("{}: {e}", path.display());
-            Default::default()
-        }
-        Err(_) => Default::default(),
-    }
+    desktop::run(endpoint, assignments)
 }
 
 #[cfg(not(any(target_os = "linux", windows)))]
-fn serve(_socket: Option<PathBuf>, _restore: Option<Option<PathBuf>>) -> anyhow::Result<()> {
+fn serve(_endpoint: Option<PathBuf>, _restore: Option<Option<PathBuf>>) -> anyhow::Result<()> {
     anyhow::bail!("wallpaper presentation is not implemented on this platform yet; use `preview`")
 }
 

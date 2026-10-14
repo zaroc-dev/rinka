@@ -16,7 +16,14 @@ The editor connects over a local byte-mode named pipe:
 `\\.\pipe\rinka-host-<USERNAME>`. Requests and replies use the existing v1
 JSON-lines protocol, including the mandatory `hello`. The host remains
 detached when the client closes. `serve --restore` defaults to
-`%APPDATA%/rinka`, matching Electron's data directory.
+`%APPDATA%/rinka`, matching Electron's data directory. The pipe's access
+list admits only the current user and SYSTEM. Another local user can still
+take the pipe name first; the host then refuses to start.
+
+The host uses two threads. The window thread owns the wallpaper windows and
+only pumps messages, because Windows links its input queue to Explorer's
+desktop thread; loading, decoding, scene building and presenting run on the
+render thread.
 
 Video projects are rejected explicitly. Scene animation uses the engine's
 scene clock and a waitable timer at 30 fps. Static wallpapers leave the
@@ -69,8 +76,11 @@ interval. It does not connect to the user's normal host pipe.
 - Actual animated-scene pacing, Explorer restart recovery, display hotplug,
   DPI changes, focus/input behavior and the classic WorkerW layout.
 - DX12 presentation. The measured host selected Vulkan.
-- Hidden/covered/powered-off animation pausing. Capabilities report
-  `visibility_pause: false`; animated scenes continue to tick.
+- Hidden/covered/powered-off animation pausing (issue #3). Capabilities
+  report `visibility_pause: false`; animated scenes continue to tick.
+- Review changes after the first measurements (window thread, re-placing
+  windows on display changes, pipe access list) compile and pass Clippy for
+  `x86_64-pc-windows-msvc` but have not run on Windows yet.
 - Native Windows FFmpeg video, video probing and video thumbnails. These
   remain Linux-only. Pause/resume currently records video pause state; it
   does not stop scene animation, matching the existing Wayland protocol.
