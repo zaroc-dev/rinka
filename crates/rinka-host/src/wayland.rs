@@ -74,7 +74,7 @@ const SCALE_DENOMINATOR: u32 = 120;
 
 /// Runs the host. `assignments` (output name → project directory) are shown
 /// as their outputs appear.
-pub fn run(socket: PathBuf, assignments: HashMap<String, PathBuf>) -> anyhow::Result<()> {
+pub fn run(endpoint: PathBuf, assignments: HashMap<String, PathBuf>) -> anyhow::Result<()> {
     let conn = Connection::connect_to_env().context("connecting to the Wayland compositor")?;
     let (globals, mut queue) = registry_queue_init(&conn).context("reading Wayland globals")?;
     let qh = queue.handle();
@@ -105,8 +105,12 @@ pub fn run(socket: PathBuf, assignments: HashMap<String, PathBuf>) -> anyhow::Re
         .handle()
         .insert_source(rx, |event, _, host: &mut Host| {
             if let channel::Event::Msg(cmd) = event {
+                let shutdown = matches!(cmd.request, Request::Shutdown);
                 let reply = host.handle(cmd.request);
                 let _ = cmd.reply.send(reply);
+                if shutdown {
+                    cmd.delivered.wait();
+                }
             }
         })
         .map_err(|e| anyhow::anyhow!("inserting control channel: {e}"))?;
@@ -138,14 +142,12 @@ pub fn run(socket: PathBuf, assignments: HashMap<String, PathBuf>) -> anyhow::Re
         .insert(event_loop.handle())
         .map_err(|e| anyhow::anyhow!("inserting Wayland source: {e}"))?;
 
-    let listener = control::bind(&socket)?;
-    log::info!("control socket: {}", socket.display());
+    let listener = control::bind(&endpoint)?;
+    log::info!("control socket: {}", endpoint.display());
     control::serve(listener, move |cmd| tx.send(cmd).is_ok());
 
     let result = event_loop.run(None, &mut host, |_| {});
-    // Let client threads flush the shutdown reply.
-    std::thread::sleep(Duration::from_millis(100));
-    let _ = std::fs::remove_file(&socket);
+    let _ = std::fs::remove_file(&endpoint);
     drop(host);
     result.context("event loop failed")
 }
