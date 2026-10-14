@@ -89,8 +89,8 @@ enum Cmd {
     /// Render project thumbnails as PNG.
     ///
     /// Reads a JSON array of jobs from stdin,
-    /// `[{"project": DIR, "out": FILE, "width": N, "height": N}]`, and prints
-    /// one JSON result per job on stdout.
+    /// `[{"project": DIR, "out": FILE, "width": N, "height": N, "time": S?}]`,
+    /// and prints one JSON result per job on stdout.
     Thumbnail,
     /// Play a video headlessly and print when each frame would be shown
     /// against its timestamp (development aid for timing checks).

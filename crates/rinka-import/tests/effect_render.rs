@@ -110,6 +110,7 @@ fn translated_effect_runs_on_a_layer() {
                     values: BTreeMap::from([("g_Amount".into(), vec![1.0])]),
                 }],
             }],
+            particles: None,
         }],
         textures: BTreeMap::from([
             (

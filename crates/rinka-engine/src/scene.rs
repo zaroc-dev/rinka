@@ -1,6 +1,7 @@
 //! Layered scenes with effect passes, composed in gamma space.
 //!
-//! Each layer is a textured quad on the canvas. A layer with effects is
+//! Each layer is a textured quad on the canvas, or a particle system whose
+//! sprites are drawn as instanced quads. A layer with effects is
 //! first processed offscreen: every effect pass draws a full-layer quad with
 //! a translated shader, reading the previous result as texture slot 0, into
 //! one of two ping-pong buffers. The final buffer is then composited.
@@ -15,6 +16,7 @@
 use std::collections::HashMap;
 
 use crate::image::ImageData;
+use crate::particles::{Simulation, Sprite, sprite_quad};
 use crate::project::{Fit, LayerBlend, SceneContent, ShaderInfo, UniformInfo};
 use crate::render::{GpuImage, Renderer};
 
@@ -73,6 +75,67 @@ fn fs_layer(in: VsOut) -> @location(0) vec4<f32> {
 }
 "#;
 
+/// Particle sprites: one instance per particle, already in clip space.
+const PARTICLE_SHADER: &str = r#"
+@group(0) @binding(0) var image: texture_2d<f32>;
+@group(0) @binding(1) var image_sampler: sampler;
+
+struct Instance {
+    @location(0) center: vec2<f32>,
+    // Full width and height along the texture's u and v axes.
+    @location(1) axis_u: vec2<f32>,
+    @location(2) axis_v: vec2<f32>,
+    // Encoded RGB multiplier and alpha.
+    @location(3) color: vec4<f32>,
+    // Sprite-sheet frame rectangles (u, v, width, height), the current one
+    // and the next, and how far to blend into the next.
+    @location(4) frame: vec4<f32>,
+    @location(5) next_frame: vec4<f32>,
+    @location(6) blend: f32,
+}
+
+struct VsOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+    @location(1) next_uv: vec2<f32>,
+    @location(2) color: vec4<f32>,
+    @location(3) blend: f32,
+}
+
+@vertex
+fn vs_particle(@builtin(vertex_index) i: u32, inst: Instance) -> VsOut {
+    let corner = vec2<f32>(f32(i & 1u), f32(i >> 1u));
+    let p = inst.center + inst.axis_u * (corner.x - 0.5) + inst.axis_v * (corner.y - 0.5);
+    var out: VsOut;
+    out.pos = vec4<f32>(p, 0.0, 1.0);
+    out.uv = inst.frame.xy + corner * inst.frame.zw;
+    out.next_uv = inst.next_frame.xy + corner * inst.next_frame.zw;
+    out.color = inst.color;
+    out.blend = inst.blend;
+    return out;
+}
+
+@fragment
+fn fs_particle(in: VsOut) -> @location(0) vec4<f32> {
+    let c = mix(
+        textureSample(image, image_sampler, in.uv),
+        textureSample(image, image_sampler, in.next_uv),
+        in.blend,
+    );
+    return vec4<f32>(c.rgb * in.color.rgb, c.a * in.color.a);
+}
+"#;
+
+/// Floats per particle instance: center, two axes, color, two frame
+/// rectangles and a blend factor.
+const PARTICLE_FLOATS: usize = 19;
+
+/// The whole texture as one frame.
+const WHOLE: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
+
+/// Most particles a layer draws.
+const MAX_PARTICLES: u32 = 100_000;
+
 /// A quad for effect passes: clip-space positions with texture coordinates,
 /// (0, 0) at the top-left, as a triangle strip.
 const QUAD: [[f32; 5]; 4] = [
@@ -98,7 +161,12 @@ struct Pass {
     output_view: wgpu::TextureView,
 }
 
-struct LayerGpu {
+enum LayerGpu {
+    Quad(QuadGpu),
+    Particles(Box<ParticleGpu>),
+}
+
+struct QuadGpu {
     params: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
     passes: Vec<Pass>,
@@ -106,10 +174,24 @@ struct LayerGpu {
     _buffers: Vec<wgpu::Texture>,
 }
 
+struct ParticleGpu {
+    sim: Simulation,
+    instances: wgpu::Buffer,
+    capacity: u32,
+    /// Instances written for the current frame.
+    count: u32,
+    bind_group: wgpu::BindGroup,
+    /// Texture height over width.
+    aspect: f32,
+    sprites: Vec<Sprite>,
+    data: Vec<f32>,
+}
+
 pub struct GpuScene {
     content: SceneContent,
-    layers: Vec<Option<LayerGpu>>,
+    layers: Vec<LayerGpu>,
     pipelines: [wgpu::RenderPipeline; 3],
+    particle_pipelines: [wgpu::RenderPipeline; 3],
     quad: wgpu::Buffer,
 }
 
@@ -135,26 +217,14 @@ fn sampler_for(device: &wgpu::Device, clamp: bool, nearest: bool) -> wgpu::Sampl
     })
 }
 
-fn layer_pipelines(
-    device: &wgpu::Device,
-    format: wgpu::TextureFormat,
-    layout: &wgpu::BindGroupLayout,
-) -> [wgpu::RenderPipeline; 3] {
-    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("rinka layer"),
-        source: wgpu::ShaderSource::Wgsl(LAYER_SHADER.into()),
-    });
-    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("rinka layer"),
-        bind_group_layouts: &[Some(layout)],
-        immediate_size: 0,
-    });
+/// Blend states for translucent, additive and opaque layers, in that order.
+fn layer_blends() -> [Option<wgpu::BlendState>; 3] {
     let alpha = wgpu::BlendComponent {
         src_factor: wgpu::BlendFactor::One,
         dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
         operation: wgpu::BlendOperation::Add,
     };
-    let blends = [
+    [
         Some(wgpu::BlendState {
             color: wgpu::BlendComponent {
                 src_factor: wgpu::BlendFactor::SrcAlpha,
@@ -172,8 +242,32 @@ fn layer_pipelines(
             alpha,
         }),
         None,
-    ];
-    blends.map(|blend| {
+    ]
+}
+
+fn blend_index(blend: LayerBlend) -> usize {
+    match blend {
+        LayerBlend::Translucent => 0,
+        LayerBlend::Additive => 1,
+        LayerBlend::Opaque => 2,
+    }
+}
+
+fn layer_pipelines(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+    layout: &wgpu::BindGroupLayout,
+) -> [wgpu::RenderPipeline; 3] {
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("rinka layer"),
+        source: wgpu::ShaderSource::Wgsl(LAYER_SHADER.into()),
+    });
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("rinka layer"),
+        bind_group_layouts: &[Some(layout)],
+        immediate_size: 0,
+    });
+    layer_blends().map(|blend| {
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("rinka layer"),
             layout: Some(&pipeline_layout),
@@ -192,6 +286,65 @@ fn layer_pipelines(
             fragment: Some(wgpu::FragmentState {
                 module: &module,
                 entry_point: Some("fs_layer"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        })
+    })
+}
+
+fn particle_pipelines(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+    layout: &wgpu::BindGroupLayout,
+) -> [wgpu::RenderPipeline; 3] {
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("rinka particles"),
+        source: wgpu::ShaderSource::Wgsl(PARTICLE_SHADER.into()),
+    });
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("rinka particles"),
+        bind_group_layouts: &[Some(layout)],
+        immediate_size: 0,
+    });
+    let attributes = wgpu::vertex_attr_array![
+        0 => Float32x2,
+        1 => Float32x2,
+        2 => Float32x2,
+        3 => Float32x4,
+        4 => Float32x4,
+        5 => Float32x4,
+        6 => Float32,
+    ];
+    layer_blends().map(|blend| {
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("rinka particles"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &module,
+                entry_point: Some("vs_particle"),
+                compilation_options: Default::default(),
+                buffers: &[Some(wgpu::VertexBufferLayout {
+                    array_stride: (PARTICLE_FLOATS * 4) as u64,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &attributes,
+                })],
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &module,
+                entry_point: Some("fs_particle"),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
@@ -314,6 +467,15 @@ impl GpuScene {
             ],
         });
         let pipelines = layer_pipelines(device, target_format.remove_srgb_suffix(), &layer_layout);
+        let particle_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("rinka particles"),
+            entries: &[
+                texture_entry(0, wgpu::ShaderStages::FRAGMENT),
+                sampler_entry(1, wgpu::ShaderStages::FRAGMENT),
+            ],
+        });
+        let particle_pipelines =
+            particle_pipelines(device, target_format.remove_srgb_suffix(), &particle_layout);
 
         let mut textures: HashMap<&str, Texture> = HashMap::new();
         for (path, info) in &content.textures {
@@ -375,6 +537,49 @@ impl GpuScene {
             let Some(texture) = textures.get(layer.texture.as_str()) else {
                 return Err(SceneError::Missing(layer.texture.clone()));
             };
+            if let Some(system) = &layer.particles {
+                let capacity = system.max_count.clamp(1, MAX_PARTICLES);
+                let instances = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("rinka particle instances"),
+                    size: u64::from(capacity) * (PARTICLE_FLOATS * 4) as u64,
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                let sampler = sampler_for(device, true, texture.nearest);
+                let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("rinka particles"),
+                    layout: &particle_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(texture.image.view()),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::Sampler(&sampler),
+                        },
+                    ],
+                });
+                let (w, h) = (texture.image.width.max(1), texture.image.height.max(1));
+                // A sprite sheet's sprites take the shape of a frame.
+                let frame = system
+                    .sheet
+                    .as_ref()
+                    .and_then(|s| s.frames.first().copied())
+                    .unwrap_or(WHOLE);
+                let aspect = (h as f32 * frame[3]) / (w as f32 * frame[2]).max(f32::EPSILON);
+                layers.push(LayerGpu::Particles(Box::new(ParticleGpu {
+                    sim: Simulation::new(system),
+                    instances,
+                    capacity,
+                    count: 0,
+                    bind_group,
+                    aspect,
+                    sprites: Vec::new(),
+                    data: Vec::new(),
+                })));
+                continue;
+            }
             let params = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("rinka layer params"),
                 size: 48,
@@ -468,7 +673,7 @@ impl GpuScene {
                     },
                 ],
             });
-            layers.push(Some(LayerGpu {
+            layers.push(LayerGpu::Quad(QuadGpu {
                 params,
                 bind_group,
                 passes,
@@ -479,6 +684,7 @@ impl GpuScene {
             content: content.clone(),
             layers,
             pipelines,
+            particle_pipelines,
             quad,
         })
     }
@@ -486,7 +692,7 @@ impl GpuScene {
     /// Draws the scene into `target` (the frame's raw view), fitted to
     /// `size`, at scene time `time` seconds.
     pub fn render(
-        &self,
+        &mut self,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
@@ -495,7 +701,13 @@ impl GpuScene {
         time: f64,
     ) {
         // Effects first, each into its own offscreen buffers.
-        for layer in self.layers.iter().flatten() {
+        let quads = || {
+            self.layers.iter().filter_map(|l| match l {
+                LayerGpu::Quad(q) => Some(q),
+                LayerGpu::Particles(_) => None,
+            })
+        };
+        for layer in quads() {
             for pass in &layer.passes {
                 if let Some(buffer) = &pass.uniform {
                     let mut data = pass.data.clone();
@@ -506,7 +718,7 @@ impl GpuScene {
                 }
             }
         }
-        for layer in self.layers.iter().flatten() {
+        for layer in quads() {
             for pass in &layer.passes {
                 let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("rinka effect pass"),
@@ -554,8 +766,71 @@ impl GpuScene {
             )
         };
 
-        for (layer, gpu) in self.content.layers.iter().zip(&self.layers) {
-            let Some(gpu) = gpu else { continue };
+        for (layer, gpu) in self.content.layers.iter().zip(&mut self.layers) {
+            let gpu = match gpu {
+                LayerGpu::Quad(q) => q,
+                LayerGpu::Particles(p) => {
+                    p.count = 0;
+                    if !layer.visible {
+                        continue;
+                    }
+                    // Local point → canvas → output → clip.
+                    let (sin, cos) = layer.angle.sin_cos();
+                    let map = |x: f32, y: f32| {
+                        let (x, y) = (x * layer.scale[0], y * layer.scale[1]);
+                        let (rx, ry) = (x * cos - y * sin, x * sin + y * cos);
+                        let (ox, oy) = canvas_to_out(layer.origin[0] + rx, layer.origin[1] + ry);
+                        (to_clip_x(ox), to_clip_y(oy))
+                    };
+                    let (zx, zy) = map(0.0, 0.0);
+                    let along = |v: [f32; 2]| {
+                        let (x, y) = map(v[0], v[1]);
+                        [x - zx, y - zy]
+                    };
+                    let system = layer.particles.as_ref().expect("particle layer");
+                    let renderer = &system.renderer;
+                    let frames = system.sheet.as_ref().map(|s| s.frames.as_slice());
+                    let rect = |i: u32| {
+                        frames
+                            .and_then(|f| f.get(i as usize).copied())
+                            .unwrap_or(WHOLE)
+                    };
+                    let b = layer.brightness;
+                    p.sim.advance_to(time);
+                    p.sim.sprites(&mut p.sprites);
+                    p.data.clear();
+                    for sprite in p.sprites.iter().take(p.capacity as usize) {
+                        let alpha = sprite.alpha * layer.alpha;
+                        if alpha <= 0.0 || sprite.size <= 0.0 {
+                            continue;
+                        }
+                        let (center, u, v) = sprite_quad(sprite, renderer, p.aspect);
+                        let (cx, cy) = map(center[0], center[1]);
+                        let (u, v) = (along(u), along(v));
+                        p.data.extend_from_slice(&[
+                            cx,
+                            cy,
+                            u[0],
+                            u[1],
+                            v[0],
+                            v[1],
+                            sprite.color[0] * layer.color[0] * b,
+                            sprite.color[1] * layer.color[1] * b,
+                            sprite.color[2] * layer.color[2] * b,
+                            alpha,
+                        ]);
+                        let (current, next, blend) = sprite.frame;
+                        p.data.extend_from_slice(&rect(current));
+                        p.data.extend_from_slice(&rect(next));
+                        p.data.push(blend);
+                    }
+                    p.count = (p.data.len() / PARTICLE_FLOATS) as u32;
+                    if p.count > 0 {
+                        queue.write_buffer(&p.instances, 0, bytemuck::cast_slice(&p.data));
+                    }
+                    continue;
+                }
+            };
             // Unit quad corner (u, v) ∈ [-0.5, 0.5]² → canvas → output → clip.
             let (w, h) = (
                 layer.size[0] * layer.scale[0],
@@ -610,24 +885,33 @@ impl GpuScene {
             ..Default::default()
         });
         for (layer, gpu) in self.content.layers.iter().zip(&self.layers) {
-            let Some(gpu) = gpu else { continue };
             if !layer.visible {
                 continue;
             }
-            let pipeline = match layer.blend {
-                LayerBlend::Translucent => &self.pipelines[0],
-                LayerBlend::Additive => &self.pipelines[1],
-                LayerBlend::Opaque => &self.pipelines[2],
-            };
-            rp.set_pipeline(pipeline);
-            rp.set_bind_group(0, &gpu.bind_group, &[]);
-            rp.draw(0..4, 0..1);
+            let blend = blend_index(layer.blend);
+            match gpu {
+                LayerGpu::Quad(q) => {
+                    rp.set_pipeline(&self.pipelines[blend]);
+                    rp.set_bind_group(0, &q.bind_group, &[]);
+                    rp.draw(0..4, 0..1);
+                }
+                LayerGpu::Particles(p) if p.count > 0 => {
+                    rp.set_pipeline(&self.particle_pipelines[blend]);
+                    rp.set_bind_group(0, &p.bind_group, &[]);
+                    rp.set_vertex_buffer(0, p.instances.slice(..));
+                    rp.draw(0..4, 0..p.count);
+                }
+                LayerGpu::Particles(_) => {}
+            }
         }
     }
 
-    /// Whether frames change over time (effects animate).
+    /// Whether frames change over time (effects or particles animate).
     pub fn animated(&self) -> bool {
-        self.layers.iter().flatten().any(|l| !l.passes.is_empty())
+        self.layers.iter().any(|l| match l {
+            LayerGpu::Quad(q) => !q.passes.is_empty(),
+            LayerGpu::Particles(_) => true,
+        })
     }
 }
 

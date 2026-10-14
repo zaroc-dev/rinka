@@ -11,6 +11,7 @@ use rinka_engine::project::{
 use serde_json::Value;
 
 use crate::assets::Resolver;
+use crate::particles::{self, Overrides};
 use crate::pkg::Package;
 use crate::report::{Item, Report, Source, Status};
 use crate::shader;
@@ -404,9 +405,27 @@ fn convert_scene(
             report.push(item);
             continue;
         }
-        let (kind, why) = if kind_of("particle") {
-            ("particle system", "particle systems are not supported yet")
-        } else if kind_of("sound") {
+        if kind_of("particle") {
+            let mut item = Item::new(&source, &name, "particle system");
+            let transform = world(obj, &mut item);
+            let converted =
+                builder.particle_layers(obj, &id, &name, transform, height as f32, &mut item);
+            if !converted.is_empty() {
+                item.native = Some(
+                    converted
+                        .iter()
+                        .map(|l| format!("layer {}", l.id))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                );
+                layers.extend(converted);
+            } else if item.status != Status::Unsupported {
+                item.unsupported("could not be converted");
+            }
+            report.push(item);
+            continue;
+        }
+        let (kind, why) = if kind_of("sound") {
             ("sound", "sound playback is not supported")
         } else if kind_of("text") {
             ("text", "text layers are not supported yet")
@@ -451,6 +470,25 @@ fn convert_scene(
     }))
 }
 
+/// A sprite sheet's project path and frame rectangles.
+type Sheet = (String, Vec<[f32; 4]>);
+
+/// What a particle object applies to each of its systems.
+struct ParticleStyle<'a> {
+    name: &'a str,
+    overrides: Overrides,
+    color: [f32; 3],
+    brightness: f32,
+    canvas_height: f32,
+}
+
+/// A stable seed from a layer id, so re-importing gives the same particles.
+fn seed(layer_id: &str) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    layer_id.hash(&mut h);
+    h.finish()
+}
+
 /// Uniforms the engine provides; anything else not set by the material
 /// reads zero.
 const PROVIDED: &[&str] = &["g_Time", "g_ModelViewProjectionMatrix"];
@@ -481,6 +519,7 @@ impl SceneBuilder {
             .first()
             .cloned()
             .ok_or_else(|| format!("texture {name} has no image"))?;
+        let flags = t.flags;
         if let Some(frame) = t.frames.first() {
             // Animated: keep the first frame.
             let img = &t.images[frame.image.min(t.images.len() - 1)];
@@ -493,6 +532,17 @@ impl SceneBuilder {
             )
             .to_image();
         }
+        self.store(&key, name, &image, flags)
+    }
+
+    /// Writes a decoded texture as a PNG asset and returns its project path.
+    fn store(
+        &mut self,
+        key: &str,
+        name: &str,
+        image: &image::RgbaImage,
+        flags: u32,
+    ) -> Result<String, String> {
         let mut png = Vec::new();
         image::codecs::png::PngEncoder::new_with_quality(
             &mut png,
@@ -517,12 +567,299 @@ impl SceneBuilder {
         self.textures.insert(
             project_path.clone(),
             TextureInfo {
-                clamp: t.flags & tex::FLAG_CLAMP_UVS != 0,
-                nearest: t.flags & tex::FLAG_NO_INTERPOLATION != 0,
+                clamp: flags & tex::FLAG_CLAMP_UVS != 0,
+                nearest: flags & tex::FLAG_NO_INTERPOLATION != 0,
             },
         );
-        self.texture_paths.insert(key, project_path.clone());
+        self.texture_paths
+            .insert(key.to_owned(), project_path.clone());
         Ok(project_path)
+    }
+
+    /// A sprite sheet: the whole sheet as one asset and its frames as
+    /// texture-coordinate rectangles. `None` for a single-image texture.
+    fn sheet(&mut self, name: &str) -> Result<Option<Sheet>, String> {
+        let path = if name.ends_with(".tex") {
+            name.to_owned()
+        } else {
+            format!("materials/{name}.tex")
+        };
+        let bytes = self
+            .resolver
+            .read(&path, None)
+            .ok_or_else(|| format!("texture {name} not found"))?;
+        let t = tex::decode(&bytes).map_err(|e| format!("texture {name}: {e}"))?;
+        if t.frames.is_empty() {
+            return Ok(None);
+        }
+        if t.frames.iter().any(|f| f.image != 0) {
+            return Err(format!("sprite sheet {name} spans several images"));
+        }
+        let image = t
+            .images
+            .first()
+            .ok_or_else(|| format!("texture {name} has no image"))?;
+        let (w, h) = (image.width() as f32, image.height() as f32);
+        let frames = t
+            .frames
+            .iter()
+            .map(|f| [f.x / w, f.y / h, f.width / w, f.height / h])
+            .collect();
+        let key = format!("sheet|{name}");
+        let project_path = match self.texture_paths.get(&key) {
+            Some(p) => p.clone(),
+            None => self.store(&key, name, image, t.flags)?,
+        };
+        Ok(Some((project_path, frames)))
+    }
+
+    /// A 1×1 white texture for solid layers.
+    fn white(&mut self) -> String {
+        let path = "textures/white.png".to_owned();
+        if !self.files.contains_key(&path) {
+            let mut png = Vec::new();
+            image::codecs::png::PngEncoder::new(&mut png)
+                .write_image(&[255; 4], 1, 1, image::ExtendedColorType::Rgba8)
+                .expect("encoding a 1×1 PNG");
+            self.files.insert(path.clone(), png);
+            self.textures.insert(
+                path.clone(),
+                TextureInfo {
+                    clamp: true,
+                    nearest: false,
+                },
+            );
+        }
+        path
+    }
+
+    /// A solid-color layer (Wallpaper Engine's `flat` shader): the
+    /// object's color and alpha over its size.
+    #[allow(clippy::too_many_arguments)]
+    fn solid_layer(
+        &mut self,
+        obj: &Value,
+        id: &str,
+        name: &str,
+        t: Transform,
+        canvas_height: f32,
+        pass: &Value,
+        item: &mut Item,
+        report: &mut Report,
+    ) -> Layer {
+        let get = |k: &str| obj.get(k);
+        for k in ["color", "alpha"] {
+            if let Some(v) = get(k) {
+                let (_, extras) = value::unwrap(v);
+                if extras.script || extras.animation {
+                    item.partial(format!(
+                        "{k} is animated or scripted; its static value is used"
+                    ));
+                }
+            }
+        }
+        for effect in get("effects")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+        {
+            let mut effect_item = Item::new(
+                format!(
+                    "object {id} › effect {}",
+                    effect.get("id").map_or("?".into(), |v| v.to_string())
+                ),
+                effect.get("file").and_then(Value::as_str).unwrap_or("?"),
+                "effect",
+            );
+            effect_item.unsupported("effects on solid layers are not supported yet");
+            item.partial(format!("effect {} is missing", effect_item.name));
+            report.push(effect_item);
+        }
+        let blend = match pass
+            .get("blending")
+            .and_then(Value::as_str)
+            .unwrap_or("translucent")
+        {
+            "additive" => LayerBlend::Additive,
+            "normal" | "disabled" => LayerBlend::Opaque,
+            _ => LayerBlend::Translucent,
+        };
+        Layer {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            visible: t.visible,
+            texture: self.white(),
+            origin: [t.origin[0], canvas_height - t.origin[1]],
+            size: get("size")
+                .and_then(value::vec_n::<2>)
+                .unwrap_or([256.0, 256.0]),
+            scale: t.scale,
+            angle: -t.angle,
+            color: get("color").and_then(value::vec_n::<3>).unwrap_or([1.0; 3]),
+            alpha: get("alpha").and_then(value::float).unwrap_or(1.0),
+            brightness: get("brightness").and_then(value::float).unwrap_or(1.0),
+            blend,
+            effects: Vec::new(),
+            particles: None,
+        }
+    }
+
+    /// Converts a particle object into one layer per system: the object's
+    /// system and, after it, its static children.
+    fn particle_layers(
+        &mut self,
+        obj: &Value,
+        id: &str,
+        name: &str,
+        t: Transform,
+        canvas_height: f32,
+        item: &mut Item,
+    ) -> Vec<Layer> {
+        let Some(path) = obj.get("particle").and_then(Value::as_str) else {
+            return Vec::new();
+        };
+        let ov = obj.get("instanceoverride");
+        let overrides = ov.map(Overrides::read).unwrap_or_default();
+        let field = |k: &str| ov.and_then(|o| o.get(k));
+        let color = field("colorn")
+            .and_then(value::vec_n::<3>)
+            .or_else(|| {
+                // Seen both as 0..1 and as 0..255.
+                field("color").and_then(value::vec_n::<3>).map(|c| {
+                    if c.iter().any(|v| *v > 1.0) {
+                        c.map(|v| v / 255.0)
+                    } else {
+                        c
+                    }
+                })
+            })
+            .unwrap_or([1.0; 3]);
+        let brightness = field("brightness").and_then(value::float).unwrap_or(1.0);
+        let style = ParticleStyle {
+            name,
+            overrides,
+            color,
+            brightness,
+            canvas_height,
+        };
+        let mut layers = Vec::new();
+        self.particle_system(path, t, id.to_owned(), &style, item, &mut layers, 0);
+        layers
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn particle_system(
+        &mut self,
+        path: &str,
+        t: Transform,
+        layer_id: String,
+        style: &ParticleStyle,
+        item: &mut Item,
+        layers: &mut Vec<Layer>,
+        depth: u32,
+    ) {
+        if depth > 4 {
+            item.partial(format!("{path}: child systems nest too deeply"));
+            return;
+        }
+        let Some(def) = self.resolver.read_json(path, None) else {
+            item.unsupported(format!("particle definition {path} not found"));
+            return;
+        };
+        let material = def
+            .get("material")
+            .and_then(Value::as_str)
+            .and_then(|m| self.resolver.read_json(m, None));
+        let pass = material
+            .as_ref()
+            .and_then(|m| m.get("passes")?.get(0))
+            .cloned()
+            .unwrap_or(Value::Null);
+        let combos = pass.get("combos").and_then(Value::as_object);
+        for combo in ["REFRACT", "LIGHTING"] {
+            if combos
+                .and_then(|c| c.get(combo))
+                .and_then(value::float)
+                .unwrap_or(0.0)
+                != 0.0
+            {
+                item.partial(format!("{combo} particles are drawn without it"));
+            }
+        }
+        let blend = match pass
+            .get("blending")
+            .and_then(Value::as_str)
+            .unwrap_or("translucent")
+        {
+            "additive" => LayerBlend::Additive,
+            "normal" | "disabled" => LayerBlend::Opaque,
+            _ => LayerBlend::Translucent,
+        };
+        let overbright = pass
+            .get("constantshadervalues")
+            .and_then(|c| c.get("ui_editor_properties_overbright"))
+            .and_then(value::float)
+            .unwrap_or(1.0);
+        let texture_name = pass
+            .get("textures")
+            .and_then(|t| t.get(0))
+            .and_then(Value::as_str)
+            .unwrap_or("util/white");
+        let (texture, frames) = match self.sheet(texture_name) {
+            Ok(Some((path, frames))) => (path, Some(frames)),
+            other => {
+                if let Err(e) = other {
+                    item.partial(format!("{e}; particles show its first frame"));
+                }
+                match self.texture(texture_name, None) {
+                    Ok(p) => (p, None),
+                    Err(e) => {
+                        item.partial(format!("{path}: {e}; the system is missing"));
+                        return;
+                    }
+                }
+            }
+        };
+        let Some(mut converted) = particles::convert(&def, &style.overrides, seed(&layer_id), item)
+        else {
+            return;
+        };
+        if let Some(frames) = frames {
+            converted.system.sheet = Some(particles::sheet(&def, frames));
+        }
+        layers.push(Layer {
+            id: layer_id.clone(),
+            name: style.name.to_owned(),
+            visible: t.visible,
+            texture,
+            origin: [t.origin[0], style.canvas_height - t.origin[1]],
+            size: [0.0, 0.0],
+            scale: t.scale,
+            angle: -t.angle,
+            color: style.color,
+            alpha: 1.0,
+            brightness: overbright * style.brightness,
+            blend,
+            effects: Vec::new(),
+            particles: Some(converted.system),
+        });
+        for (i, child) in converted.children.iter().enumerate() {
+            let local = Transform {
+                origin: [child.origin[0], child.origin[1]],
+                scale: [child.scale[0], child.scale[1]],
+                angle: child.angles[2],
+                visible: true,
+            };
+            self.particle_system(
+                &child.path,
+                Transform::compose(t, local),
+                format!("{layer_id}.{i}"),
+                style,
+                item,
+                layers,
+                depth + 1,
+            );
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -555,6 +892,9 @@ impl SceneBuilder {
             .cloned()
             .unwrap_or(Value::Null);
         let shader = pass.get("shader").and_then(Value::as_str).unwrap_or("");
+        if shader == "flat" {
+            return Some(self.solid_layer(obj, id, name, t, canvas_height, &pass, item, report));
+        }
         if !shader.starts_with("genericimage") {
             item.unsupported(format!("custom layer shader {shader} is not supported"));
             return None;
@@ -704,6 +1044,7 @@ impl SceneBuilder {
             brightness,
             blend,
             effects,
+            particles: None,
         })
     }
 

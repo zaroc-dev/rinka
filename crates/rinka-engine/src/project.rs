@@ -230,6 +230,10 @@ pub struct Layer {
     pub blend: LayerBlend,
     #[serde(default)]
     pub effects: Vec<Effect>,
+    /// Makes this a particle layer: the system's sprites use `texture`, and
+    /// `origin`, `scale` and `angle` place the system. `size` is unused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub particles: Option<crate::particles::Particles>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

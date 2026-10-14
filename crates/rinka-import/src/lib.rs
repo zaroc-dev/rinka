@@ -3,6 +3,7 @@
 
 pub mod assets;
 pub mod convert;
+mod particles;
 pub mod pkg;
 pub mod preprocess;
 pub mod report;
