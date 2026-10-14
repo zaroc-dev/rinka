@@ -33,3 +33,5 @@ await Promise.all([
 ]);
 cpSync(src("renderer/index.html"), path.join(dist, "renderer/index.html"));
 cpSync(src("renderer/wasm/rinka_wasm_bg.wasm"), path.join(dist, "renderer/rinka_wasm_bg.wasm"));
+// Window and tray icons, rendered from assets/rinka.svg (see resources/README.md).
+cpSync(path.join(app, "resources"), path.join(dist, "resources"), { recursive: true, filter: (f) => !f.endsWith(".md") });
