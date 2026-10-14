@@ -1,0 +1,27 @@
+[workspace]
+resolver = "3"
+members = ["crates/rinka-engine", "crates/rinka-wasm", "crates/rinka-host", "crates/rinka-import"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+publish = false
+
+[workspace.dependencies]
+rinka-engine = { path = "crates/rinka-engine" }
+wgpu = { version = "30.0.1", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+anyhow = "1"
+log = "0.4"
+pollster = "1"
+
+[profile.release]
+lto = "thin"
+
+[profile.release-wasm]
+inherits = "release"
+# Decoding speed matters more than download size for a desktop app.
+opt-level = 3

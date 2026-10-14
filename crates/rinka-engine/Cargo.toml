@@ -1,0 +1,21 @@
+[package]
+name = "rinka-engine"
+description = "Shared Rinka engine: project model, scene evaluation and rendering"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+wgpu = { workspace = true, features = ["wgsl"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+log.workspace = true
+bytemuck = { version = "1", features = ["derive"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+half = { version = "2", features = ["bytemuck"] }
+
+[dev-dependencies]
+pollster.workspace = true
+wgpu = { workspace = true, features = ["wgsl", "vulkan"] }

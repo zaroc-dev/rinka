@@ -1,0 +1,24 @@
+[package]
+name = "rinka-import"
+description = "Wallpaper Engine package conversion into Rinka projects"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+rinka-engine.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+log.workspace = true
+lz4_flex = { version = "0.14", default-features = false, features = ["std", "safe-decode"] }
+# Same naga as wgpu, for GLSL → WGSL translation.
+naga = { version = "30", features = ["glsl-in", "wgsl-out"] }
+regex = "1"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "gif", "tga"] }
+
+[dev-dependencies]
+pollster.workspace = true
+wgpu = { workspace = true, features = ["std", "wgsl", "vulkan"] }

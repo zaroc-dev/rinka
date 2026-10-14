@@ -1,0 +1,22 @@
+[package]
+name = "rinka-wasm"
+description = "Rinka engine bindings for the WebGPU editor preview"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+rinka-engine.workspace = true
+wgpu = { workspace = true, features = ["std", "wgsl", "webgpu"] }
+serde_json.workspace = true
+log.workspace = true
+# Must match the wasm-bindgen CLI from the dev shell exactly.
+wasm-bindgen = "=0.2.129"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["HtmlCanvasElement", "HtmlVideoElement"] }
+console_error_panic_hook = "0.1"
+console_log = "1"

@@ -1,0 +1,7 @@
+/target
+node_modules/
+/app/dist/
+/app/out/
+/app/src/renderer/wasm/
+.direnv/
+result

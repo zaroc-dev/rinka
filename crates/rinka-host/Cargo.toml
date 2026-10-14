@@ -1,0 +1,29 @@
+[package]
+name = "rinka-host"
+description = "Rinka native playback host: wallpaper surfaces and the control socket"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+rinka-engine.workspace = true
+rinka-import = { path = "../rinka-import" }
+wgpu = { workspace = true, features = ["std", "wgsl", "vulkan", "gles", "dx12"] }
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+log.workspace = true
+pollster.workspace = true
+env_logger = "0.11"
+clap = { version = "4", features = ["derive"] }
+raw-window-handle = "0.6"
+winit = "0.30"
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+smithay-client-toolkit = { version = "0.21", default-features = false, features = ["calloop"] }
+wayland-backend = { version = "0.3", features = ["client_system"] }
+# Linked against the FFmpeg from the dev shell.
+ffmpeg-next = "9"
+

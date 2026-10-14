@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="outer" x1="0.3" y1="0" x2="0.6" y2="1">
+      <stop offset="0" stop-color="#d9f2f6"/>
+      <stop offset="0.45" stop-color="#a2c7ce"/>
+      <stop offset="1" stop-color="#6a73b1"/>
+    </linearGradient>
+    <linearGradient id="core" x1="0.5" y1="0" x2="0.5" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#bfe3ea"/>
+    </linearGradient>
+    <radialGradient id="halo" cx="0.5" cy="0.62" r="0.5">
+      <stop offset="0" stop-color="#6fb9d1" stop-opacity="0.55"/>
+      <stop offset="0.6" stop-color="#354365" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#080f10" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="blur" filterUnits="userSpaceOnUse" x="0" y="0" width="256" height="256">
+      <feGaussianBlur stdDeviation="7"/>
+    </filter>
+  </defs>
+  <rect width="256" height="256" rx="58" fill="#080f10"/>
+  <rect width="256" height="256" rx="58" fill="url(#halo)"/>
+  <rect x="1.5" y="1.5" width="253" height="253" rx="56.5" fill="none" stroke="#354365" stroke-width="3"/>
+  <!-- Main foxfire: a flame whose tip curls like a tail. -->
+  <g>
+    <path filter="url(#blur)" opacity="0.8" fill="#8fd0e0"
+      d="M150 36c-30 18-22 46-12 64c-20-8-26-26-24-40c-28 22-48 52-48 92c0 40 28 70 64 70s64-28 64-66c0-30-18-48-30-66c-12-18-22-34-14-54z"/>
+    <path fill="url(#outer)"
+      d="M150 36c-30 18-22 46-12 64c-20-8-26-26-24-40c-28 22-48 52-48 92c0 40 28 70 64 70s64-28 64-66c0-30-18-48-30-66c-12-18-22-34-14-54z"/>
+    <path fill="url(#core)"
+      d="M134 118c-4 16 10 24 10 42c0 20-12 34-28 34s-26-12-26-28c0-22 16-34 22-52c4 14 2 22 10 28c6-8 8-16 12-24z"/>
+  </g>
+  <!-- Two small wisps drifting beside it. -->
+  <g fill="#cfeaf0">
+    <path filter="url(#blur)" opacity="0.7" d="M198 112c-4 8 6 12 6 20a10 10 0 0 1-20 0c0-10 8-14 14-20z"/>
+    <path d="M198 112c-4 8 6 12 6 20a10 10 0 0 1-20 0c0-10 8-14 14-20z"/>
+    <path filter="url(#blur)" opacity="0.6" d="M60 72c-3 6 4 9 4 14a7 7 0 0 1-14 0c0-7 6-10 10-14z"/>
+    <path opacity="0.85" d="M60 72c-3 6 4 9 4 14a7 7 0 0 1-14 0c0-7 6-10 10-14z"/>
+  </g>
+</svg>
