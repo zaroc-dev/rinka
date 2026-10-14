@@ -77,7 +77,8 @@ pub struct Texture {
     /// animated textures keep the full sheet their frames index into.
     pub images: Vec<RgbaImage>,
     pub frames: Vec<TexFrame>,
-    /// The texture is an MP4 video, not pixels (`TEXB0004`).
+    /// The texture is an MP4 video, not pixels (`TEXB0004`, or `TEXB0003`
+    /// with flag 0x20).
     pub video: Option<Vec<u8>>,
 }
 
@@ -196,7 +197,9 @@ pub fn decode(data: &[u8]) -> Result<Texture, TexError> {
             } else {
                 raw.to_vec()
             };
-            if is_mp4 {
+            // TEXB0003 can carry MP4 too (flag 0x20, no is-MP4 field); the
+            // bytes are what tell.
+            if is_mp4 || is_mp4_file(&bytes) {
                 video = Some(bytes);
                 continue;
             }
@@ -272,6 +275,11 @@ pub fn decode(data: &[u8]) -> Result<Texture, TexError> {
         frames,
         video,
     })
+}
+
+/// An ISO media file starts with a box whose type is `ftyp`.
+fn is_mp4_file(bytes: &[u8]) -> bool {
+    bytes.get(4..8) == Some(b"ftyp")
 }
 
 fn raw_to_rgba(format: TexFormat, w: u32, h: u32, data: &[u8]) -> Result<RgbaImage, TexError> {
@@ -420,6 +428,25 @@ mod tests {
         let mut block = vec![200, 10];
         block.extend(&ones.to_le_bytes()[..6]);
         assert_eq!(bc3_alpha(&block), [10; 16]);
+    }
+
+    #[test]
+    fn mp4_in_a_texb0003_container_is_video() {
+        let mp4 = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp41isom".to_vec();
+        let mut tex = b"TEXV0005\0TEXI0001\0".to_vec();
+        // RGBA8888, clamp + video flags, 16×16 texture and image, unknown.
+        for v in [0i32, 0x22, 16, 16, 16, 16, 0] {
+            tex.extend(v.to_le_bytes());
+        }
+        tex.extend(b"TEXB0003\0");
+        // One image, no FreeImage format, one mip: 16×16, not LZ4.
+        for v in [1i32, -1, 1, 16, 16, 0, 0, mp4.len() as i32] {
+            tex.extend(v.to_le_bytes());
+        }
+        tex.extend(&mp4);
+        let t = decode(&tex).unwrap();
+        assert_eq!(t.video.as_deref(), Some(mp4.as_slice()));
+        assert!(t.images.is_empty());
     }
 
     #[test]
