@@ -18,6 +18,8 @@ mod thumbnail;
 // shared; `desktop` is this platform's presenter, with
 // `run(endpoint, assignments)`.
 #[cfg(any(target_os = "linux", windows))]
+mod clock;
+#[cfg(any(target_os = "linux", windows))]
 mod control;
 #[cfg(any(target_os = "linux", windows))]
 mod restore;

@@ -39,15 +39,13 @@ pub enum Request {
         project: PathBuf,
     },
     /// Removes the wallpaper from one output, or from all outputs.
-    Unassign {
-        output: Option<String>,
-    },
+    Unassign { output: Option<String> },
     /// Re-reads a project from disk on every output showing it.
-    Reload {
-        project: PathBuf,
-    },
-    /// Pauses video playback on every output.
+    Reload { project: PathBuf },
+    /// Stops all animation (videos and scenes) on every output. The last
+    /// frame stays on screen; new assignments start paused.
     Pause,
+    /// Continues animation from where it stopped.
     Resume,
     /// Jumps videos to `position` seconds, on one output or on all.
     Seek {
