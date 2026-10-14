@@ -68,7 +68,7 @@ pub fn image_asset(dir: &Path, project: &Project) -> Result<Option<PathBuf>, Err
 }
 
 /// The video asset of a project, if it shows one.
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg_attr(not(any(target_os = "linux", windows)), allow(dead_code))]
 pub fn video_asset(dir: &Path, project: &Project) -> Result<Option<PathBuf>, Error> {
     match &project.content {
         rinka_engine::Content::Video { source, .. } => asset_path(dir, source).map(Some),
@@ -76,11 +76,11 @@ pub fn video_asset(dir: &Path, project: &Project) -> Result<Option<PathBuf>, Err
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", windows))]
 pub use cache::ImageCache;
 
 /// Decoded and uploaded images for the wallpaper presenter.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", windows))]
 mod cache {
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};

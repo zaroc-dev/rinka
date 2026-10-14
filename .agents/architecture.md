@@ -4,13 +4,14 @@
 flowchart TD
     UI[Electron editor: app/] -->|IPC| MAIN[Electron main process]
     MAIN -->|spawn: import, thumbnail| HOSTCLI[rinka-host CLI]
-    MAIN -->|JSON lines over Unix socket| HOST[rinka-host serve]
+    MAIN -->|JSON lines over socket or named pipe| HOST[rinka-host serve]
     UI --> WASM[rinka-wasm: engine in WebGPU]
     HOSTCLI --> IMPORT[rinka-import]
     HOST --> ENGINE[rinka-engine]
     WASM --> ENGINE
     IMPORT --> ENGINE
     HOST --> WL[Wayland layer-shell surfaces]
+    HOST --> WIN[Windows Explorer child windows]
     HOST --> FF[FFmpeg decode threads]
 ```
 
@@ -20,7 +21,7 @@ flowchart TD
 | --- | --- | --- |
 | `rinka-engine` | Project model (`project.rs`), color (`color.rs`), image decoding (`image.rs`), video conversion (`video.rs`), GPU profile and surfaces (`gpu.rs`), renderer (`render.rs`), scenes and effect passes (`scene.rs`), offscreen capture (`capture.rs`) | none |
 | `rinka-wasm` | wasm-bindgen wrapper: `Preview` (canvas surface, asset cache, video frames, scenes), `decodeImage`/`decodeImageRaw` for the worker | browser only (`#![cfg(target_arch = "wasm32")]`) |
-| `rinka-host` | `serve` (Wayland presenter + control socket), `import`, `thumbnail`, `preview` (winit window), `video-timing`, `info` | Linux: Wayland, FFmpeg |
+| `rinka-host` | `serve` (Wayland/Win32 presenter + control endpoint), `import`, `thumbnail`, `preview` (winit window), `video-timing`, `info` | Linux: Wayland, FFmpeg; Windows: Explorer child windows, named pipe (no video yet) |
 | `rinka-import` | Wallpaper Engine: `pkg.rs`, `tex.rs`, `preprocess.rs`, `shader.rs`, `value.rs`, `assets.rs`, `convert.rs`, `report.rs` | none |
 
 `app/` is the Electron editor: `src/main` (main process), `src/preload`
@@ -97,6 +98,13 @@ holds `{version: 1, assignments: {output: projectId}}`; the library is
 - `--restore [DIR]` reads the editor's `config.json` assignments at start.
 
 ## Control protocol (v1)
+
+Windows uses `\\.\pipe\rinka-host-<USERNAME>` with the same protocol. Its
+presenter creates one input-transparent, nonactivating Explorer child window
+per monitor, measured in physical pixels. Static targets render on change;
+scene animation uses a waitable timer. Assignments survive disconnection,
+and shell restart/display broadcasts trigger rebuilding. See
+`docs/windows-host.md` for measured behavior and unverified recovery checks.
 
 Newline-delimited JSON on `$XDG_RUNTIME_DIR/rinka/host.sock`. Each request
 `{"id", "cmd", …}` gets one response `{"id", "ok", "result" | "error": {code,

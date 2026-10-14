@@ -8,17 +8,18 @@ use rinka_engine::{GpuInfo, Project, Srgb8};
 
 mod preview;
 mod project_io;
-mod thumbnail;
-// The control transport is Unix-only until the Windows host lands.
-#[cfg_attr(not(unix), allow(dead_code))]
+#[cfg_attr(not(any(target_os = "linux", windows)), allow(dead_code))]
 mod protocol;
+mod thumbnail;
 
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", windows))]
 mod control;
 #[cfg(target_os = "linux")]
 mod video;
 #[cfg(target_os = "linux")]
 mod wayland;
+#[cfg(windows)]
+mod win32;
 
 #[derive(Parser)]
 #[command(version, about)]
@@ -31,12 +32,12 @@ struct Cli {
 enum Cmd {
     /// Run the wallpaper host and its control socket.
     Serve {
-        /// Control socket path [default: $XDG_RUNTIME_DIR/rinka/host.sock].
+        /// Control endpoint: Unix socket on Linux, named pipe on Windows.
         #[arg(long)]
         socket: Option<PathBuf>,
         /// Restore the wallpapers the editor assigned, from its data
-        /// directory [default: ~/.config/rinka]. Use this when starting the
-        /// host at login.
+        /// directory [default: ~/.config/rinka on Linux, %APPDATA%/rinka on
+        /// Windows]. Use this when starting the host at login.
         ///
         /// `None`: not given; `Some(None)`: bare flag (default directory).
         /// An empty `default_missing_value` would be rejected by the path
@@ -136,7 +137,7 @@ fn load_with_image(dir: &std::path::Path) -> anyhow::Result<preview::Loaded> {
     Ok(preview::Loaded { project, image })
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", windows))]
 fn serve(socket: Option<PathBuf>, restore: Option<Option<PathBuf>>) -> anyhow::Result<()> {
     let socket = match socket {
         Some(s) => s,
@@ -152,7 +153,14 @@ fn serve(socket: Option<PathBuf>, restore: Option<Option<PathBuf>>) -> anyhow::R
             saved_assignments(&dir)
         }
     };
-    wayland::run(socket, assignments)
+    #[cfg(target_os = "linux")]
+    {
+        wayland::run(socket, assignments)
+    }
+    #[cfg(windows)]
+    {
+        win32::run(socket, assignments)
+    }
 }
 
 /// The editor's data directory: `$XDG_CONFIG_HOME/rinka` or `~/.config/rinka`.
@@ -165,8 +173,15 @@ fn default_data_dir() -> anyhow::Result<PathBuf> {
     Ok(config.join("rinka"))
 }
 
+/// Matches Electron's `appData/rinka` directory on Windows.
+#[cfg(windows)]
+fn default_data_dir() -> anyhow::Result<PathBuf> {
+    let config = std::env::var_os("APPDATA").context("APPDATA is not set")?;
+    Ok(PathBuf::from(config).join("rinka"))
+}
+
 /// Output → project directory, from the editor's `config.json`.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", windows))]
 fn saved_assignments(dir: &std::path::Path) -> std::collections::HashMap<String, PathBuf> {
     #[derive(serde::Deserialize)]
     struct Config {
@@ -188,7 +203,7 @@ fn saved_assignments(dir: &std::path::Path) -> std::collections::HashMap<String,
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", windows)))]
 fn serve(_socket: Option<PathBuf>, _restore: Option<Option<PathBuf>>) -> anyhow::Result<()> {
     anyhow::bail!("wallpaper presentation is not implemented on this platform yet; use `preview`")
 }
