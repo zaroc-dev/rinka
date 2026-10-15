@@ -58,8 +58,9 @@ content; successful surface setup is not proof of exact screen pixels. See
 
 ## Release packages
 
-`.github/workflows/release.yml` runs on version tags and on pull requests that
-touch packaging. To check the RPM locally, run its `linux` job steps in a
+`.github/workflows/release.yml` runs on version tags; run it by hand
+(`gh workflow run release.yml --ref BRANCH`) to build packages without
+publishing. To check the RPM locally, run its `linux` job steps in a
 `fedora:45` container (with `app/src/renderer/wasm` from
 `nix build .#rinka-wasm`), then install the RPM in a fresh container and
 smoke-start it under `xvfb-run` with `RINKA_SMOKE=1 RINKA_SMOKE_CONNECT=1`.

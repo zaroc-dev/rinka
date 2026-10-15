@@ -1,17 +1,12 @@
 # Builds the Windows installer and the Fedora RPM, checks the Nix package, and
 # on a version tag (0.1.0 or v0.1.0) publishes a GitHub release and moves the
-# `stable` branch to the tagged commit for Nix users. Pull requests that touch
-# packaging run the same builds without publishing.
+# `stable` branch to the tagged commit for Nix users. A manual run builds the
+# packages without publishing.
 name: Release
 
 on:
   push:
     tags: ["v[0-9]+.[0-9]+.[0-9]+*", "[0-9]+.[0-9]+.[0-9]+*"]
-  pull_request:
-    paths:
-      - ".github/workflows/release.yml"
-      - "app/electron-builder.yml"
-      - "packaging/**"
   workflow_dispatch:
 
 permissions:
@@ -19,7 +14,6 @@ permissions:
 
 concurrency:
   group: release-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   PNPM_VERSION: "12.9.0"
