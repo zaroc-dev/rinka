@@ -21,7 +21,7 @@ flowchart TD
 | --- | --- | --- |
 | `rinka-engine` | Project model (`project.rs`), color (`color.rs`), image decoding (`image.rs`), video conversion (`video.rs`), GPU profile and surfaces (`gpu.rs`), renderer (`render.rs`), scenes and effect passes (`scene.rs`), particle format and simulation (`particles.rs`), layer meshes and skinning (`mesh.rs`), offscreen capture (`capture.rs`) | none |
 | `rinka-wasm` | wasm-bindgen wrapper: `Preview` (canvas surface, asset cache, video frames, scenes), `decodeImage`/`decodeImageRaw` for the worker | browser only (`#![cfg(target_arch = "wasm32")]`) |
-| `rinka-host` | `serve` (Wayland/Win32 presenter + control endpoint), `import`, `thumbnail`, `preview` (winit window), `video-timing`, `info` | Linux: Wayland, FFmpeg; Windows: Explorer child windows, named pipe (no video yet) |
+| `rinka-host` | `serve` (Wayland/Win32 presenter + control endpoint), `import`, `thumbnail`, `preview` (winit window), `video-timing`, `info` | Linux: Wayland; Windows: Explorer child windows and named pipe; FFmpeg on both |
 | `rinka-import` | Wallpaper Engine: `pkg.rs`, `tex.rs`, `preprocess.rs`, `shader.rs`, `value.rs`, `assets.rs`, `convert.rs`, `particles.rs`, `puppet.rs`, `report.rs` | none |
 
 `app/` is the Electron editor: `src/main` (main process), `src/preload`
@@ -159,6 +159,13 @@ only pumps messages and runs short window calls (`Ui::call`, a synchronous
 `SendMessageW`); the render thread loads, renders and presents. Explorer's
 desktop thread shares an input queue with whichever thread owns the
 wallpaper windows, so nothing slow may run there.
+
+Video uses the same FFmpeg `video.rs` decoder on Windows and Linux, with a
+bounded queue per output. Windows polls players from its waitable timer,
+uploads raw YUV planes and schedules by PTS. Global/covered/window-loss pause
+stops their clocks; paused seek produces a new still frame. `prepare()`
+decodes a first frame before replacing an assignment. Thumbnails use the
+same decoder and publish matrix/range metadata to the editor.
 
 Newline-delimited JSON on `$XDG_RUNTIME_DIR/rinka/host.sock`. Each request
 `{"id", "cmd", …}` gets one response `{"id", "ok", "result" | "error": {code,

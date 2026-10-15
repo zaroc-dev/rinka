@@ -173,7 +173,7 @@ struct FirstFrame {
 }
 
 /// Uploads the first frame of a video project, which stands for the video.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", windows))]
 fn video_first_frame(
     dir: &std::path::Path,
     project: &rinka_engine::Project,
@@ -205,8 +205,8 @@ fn video_first_frame(
     }))
 }
 
-/// Video thumbnails need the native decoder, which only Linux builds have.
-#[cfg(not(target_os = "linux"))]
+/// Other hosts have no native decoder.
+#[cfg(not(any(target_os = "linux", windows)))]
 fn video_first_frame(
     _dir: &std::path::Path,
     _project: &rinka_engine::Project,

@@ -24,8 +24,10 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 [target.'cfg(target_os = "linux")'.dependencies]
 smithay-client-toolkit = { version = "0.21", default-features = false, features = ["calloop"] }
 wayland-backend = { version = "0.3", features = ["client_system"] }
-# Linked against the FFmpeg from the dev shell.
-ffmpeg-next = "9"
+
+[target.'cfg(any(target_os = "linux", windows))'.dependencies]
+# The same software decoder on both hosts; RGB conversion stays in the engine.
+ffmpeg-next = { version = "9", default-features = false, features = ["format", "software-scaling"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [

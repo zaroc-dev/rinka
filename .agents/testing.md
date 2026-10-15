@@ -48,9 +48,29 @@ printf '%s\n' '{"id":1,"cmd":"hello","protocol":1}' '{"id":2,"cmd":"outputs"}' \
 
 ## Windows host
 
-For the experimental Windows host, run `cargo build -p rinka-host`, install
-the app dependencies, then `node app/scripts/windows-host-smoke.mjs` from the
-repository root. It uses a separate named pipe and generated content, verifies
+Prepare native video dependencies in the Windows development PowerShell
+session, then build and generate fixtures (app dependencies must be installed):
+
+```powershell
+. ./app/scripts/setup-windows-video.ps1
+cargo build -p rinka-host --target-dir target/windows-video
+cargo build -p rinka-host --example windows_video_screen --target-dir target/windows-video
+node app/scripts/video-fixtures.mjs
+$env:RINKA_VIDEO_FIXTURES = (Resolve-Path target/video-fixtures).Path
+cargo test -p rinka-host --target-dir target/windows-video -- --include-ignored
+$env:RINKA_HOST_BIN = (Resolve-Path target/windows-video/debug/rinka-host.exe).Path
+node app/scripts/windows-host-smoke.mjs
+node app/scripts/windows-video-smoke.mjs
+```
+
+The Windows SDK and libclang stay under ignored `target/windows-tools`; the
+build puts runtime DLLs beside the executable. `RINKA_VIDEO_SCREEN_BIN` can
+select a capture helper built in another profile. The video smoke checks
+actual desktop pixels and briefly shows a generated teal covering window.
+The MSVC check now also needs the FFmpeg SDK/bindgen environment; a Linux
+cross-check without those dependencies is not sufficient.
+
+The existing Windows host smoke accepts `RINKA_HOST_BIN` too. It uses a separate named pipe and generated content, verifies
 protocol/playback/restore behavior and shuts its host down. `--hold` leaves a
 30-second interval for inspection. It temporarily replaces visible desktop
 content; successful surface setup is not proof of exact screen pixels. See

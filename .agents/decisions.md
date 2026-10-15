@@ -43,7 +43,8 @@ reason here in the same change.
 
 | Decision | Reason |
 | --- | --- |
-| Native: ffmpeg-next, software decode, swscale only to planar yuv420p | Widest format coverage; the engine still does the color math. Hardware decode later, measured. |
+| Native on Linux and Windows: ffmpeg-next, software decode, swscale only to planar yuv420p | Widest format coverage; the engine still does the color math. Hardware decode later, measured. |
+| Windows FFmpeg SDK/runtime pinned and hash-verified in a local setup script; DLLs beside the host | Reuse the Linux decoder and engine color path; users do not need FFmpeg on PATH. CI packages the same SDK with its notices. |
 | Preview: WebCodecs (`prefer-software`) + mp4box demux, I420 planes to the engine | The only browser path that gives raw planes. `<video>` stays as a labelled fallback. |
 | Matrix and range for the preview come from the native probe | WebCodecs misreports range. |
 | Timing from presentation timestamps; loops continue the timeline; position from the shown frame's file PTS | VFR and truncated files behave correctly. |
@@ -66,7 +67,7 @@ reason here in the same change.
 - Particle simulation design (determinism, seeking).
 - Project stacks: schema and per-instance overrides.
 - Package format beyond a project directory; asset content hashes.
-- Windows host: minimum supported version, video and visibility
+- Windows host: minimum supported version, broader video/screen acceptance and visibility
   signals. Initial presentation uses Explorer child windows (classic WorkerW
   or raised Progman desktop), with named-pipe control; acceptance remains
   incomplete (`docs/windows-host.md`).
