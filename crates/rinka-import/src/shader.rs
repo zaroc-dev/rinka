@@ -440,6 +440,10 @@ pub fn translate(
 
     let (vertex_wgsl, vertex_module) = compile(&vsrc, naga::ShaderStage::Vertex)?;
     let (fragment_wgsl, fragment_module) = compile(&fsrc, naga::ShaderStage::Fragment)?;
+    // GLSL samples with implicit derivatives in any control flow; WGSL
+    // rejects that unless the uniformity diagnostic is off. naga's analysis
+    // misses cases browsers' compilers catch, so it is always off.
+    let fragment_wgsl = format!("diagnostic(off, derivative_uniformity);\n\n{fragment_wgsl}");
 
     let (uniforms, uniform_size) = reflect_uniforms(&vertex_module)
         .or_else(|| reflect_uniforms(&fragment_module))
@@ -724,6 +728,20 @@ void main() {
         let frag = "varying vec2 v_TexCoord;\nuniform sampler2D g_Texture0;\nvoid main() {\n    vec4 c = texSample2D(g_Texture0, v_TexCoord);\n    c.rgb = dot(c.rgb, vec3(0.3, 0.59, 0.11));\n    c.rg = c;\n    gl_FragColor = c;\n}\n";
         let vert = "attribute vec3 a_Position;\nattribute vec2 a_TexCoord;\nvarying vec2 v_TexCoord;\nvoid main() {\n    gl_Position = vec4(a_Position, 1.0);\n    v_TexCoord = a_TexCoord;\n}\n";
         translate(vert, frag, &BTreeMap::new(), &include).expect("translates");
+    }
+
+    #[test]
+    fn sampling_in_divergent_branches_stays_legal() {
+        // Browsers reject this without the directive; naga accepts it either way.
+        let frag = "varying vec2 v_TexCoord;\nuniform sampler2D g_Texture0;\nvoid main() {\n    vec4 c = vec4(0.0);\n    if (v_TexCoord.x > 0.5) {\n        c = texSample2D(g_Texture0, v_TexCoord);\n    }\n    gl_FragColor = c;\n}\n";
+        let t = translate(VERT, frag, &BTreeMap::new(), &include).expect("translates");
+        assert!(
+            t.fragment
+                .starts_with("diagnostic(off, derivative_uniformity);"),
+            "{}",
+            t.fragment
+        );
+        assert!(!t.vertex.contains("diagnostic"));
     }
 
     #[test]
