@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Rinka
+GenericName=Wallpaper engine
+Comment=Animated wallpapers, images, videos and Wallpaper Engine scenes
+Exec=rinka %U
+Icon=rinka
+Categories=Graphics;Utility;

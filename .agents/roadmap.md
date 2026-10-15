@@ -107,5 +107,9 @@ scenes each.
 - Hardware video decode; MKV/WebM in the preview (WebCodecs needs a demuxer);
   HDR and 10-bit video.
 - Asset content hashes in the project manifest.
-- No CI build workflow; only Pages deploys.
+- CI builds only on version tags (`.github/workflows/release.yml`); no build
+  or test workflow on pull requests. GPU tests would need a GPU runner.
+- Release packages: the RPM is checked to install on Fedora 45 and the
+  packaged app to start and spawn its bundled host (2026-10-15, in a
+  container). The Windows installer has not yet been run on Windows.
 - Sprite-sheet animation (`TEXS` frames) plays only the first frame.

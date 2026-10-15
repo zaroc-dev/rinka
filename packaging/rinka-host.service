@@ -1,0 +1,13 @@
+# Runs the wallpaper host at login and restores the wallpapers chosen in the
+# editor. Enable with: systemctl --user enable --now rinka-host
+[Unit]
+Description=Rinka wallpaper host
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+ExecStart=/usr/bin/rinka-host serve --restore
+Restart=on-failure
+
+[Install]
+WantedBy=graphical-session.target

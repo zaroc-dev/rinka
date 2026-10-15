@@ -30,14 +30,21 @@ Rinka is early. See [what works and what's next](#status).
 
 ## Install
 
-Rinka is a Nix flake. You need a Wayland compositor with wlr-layer-shell (Niri
-and Hyprland are the tested targets) and a Vulkan-capable GPU.
+You need a Wayland compositor with wlr-layer-shell (Niri and Hyprland are the
+tested targets) and a Vulkan-capable GPU. Releases are listed on the
+[releases page](https://github.com/zaroc-dev/rinka/releases).
 
-Try it:
+### Nix
+
+Try the latest release:
 
 ```sh
-nix run github:zaroc-dev/rinka
+nix run github:zaroc-dev/rinka/stable
 ```
+
+The `stable` branch always points at the newest release; `nix flake update`
+moves you to the next one. Use `github:zaroc-dev/rinka` for the development
+branch, or `github:zaroc-dev/rinka/0.1.0` to stay on one release.
 
 The editor starts the wallpaper host on its own. To have wallpapers come back
 after a reboot, run the host at login with `--restore`, which reads the
@@ -47,7 +54,7 @@ assignments you made in the editor.
 
 ```nix
 # flake.nix
-inputs.rinka.url = "github:zaroc-dev/rinka";
+inputs.rinka.url = "github:zaroc-dev/rinka/stable";
 
 # home.nix
 imports = [ inputs.rinka.homeManagerModules.default ];
@@ -61,6 +68,25 @@ for example in Niri:
 ```kdl
 spawn-at-startup "rinka-host" "serve" "--restore"
 ```
+
+### Fedora
+
+Download the `.rpm` from a release and install it:
+
+```sh
+sudo dnf install ./rinka-*.rpm
+systemctl --user enable --now rinka-host   # restore wallpapers at login
+```
+
+Fedora's own FFmpeg (`ffmpeg-free`) cannot decode H.264 or HEVC; for those
+videos swap in `ffmpeg-libs` from RPM Fusion. The RPM is built for the Fedora
+release named in its file name.
+
+### Windows (experimental)
+
+Download `Rinka-Setup-<version>.exe`, or the zip to run it without
+installing. Colors, images and scenes play; video does not yet. The builds are
+not signed, so SmartScreen will warn before the first start.
 
 ### Notes
 
@@ -123,6 +149,13 @@ rinka-host info
 The control protocol (newline-delimited JSON over
 `$XDG_RUNTIME_DIR/rinka/host.sock`) is documented in
 `crates/rinka-host/src/protocol.rs`.
+
+**Releasing.** Set the same version in `Cargo.toml` and `app/package.json`,
+merge, then push a matching tag (`git tag 0.1.0 && git push origin 0.1.0`; a
+`v` prefix also works). The [release workflow](.github/workflows/release.yml)
+builds the Windows installer and the Fedora RPM, checks that the Nix package
+builds, publishes the release and fast-forwards `stable`. A version with a
+suffix (`0.2.0-rc.1`) becomes a pre-release and leaves `stable` alone.
 
 Contributor notes (architecture, decisions, known traps, testing, roadmap)
 are in [AGENTS.md](AGENTS.md) and [.agents/](.agents/).

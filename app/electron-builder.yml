@@ -1,0 +1,36 @@
+# Packages the editor with its host for releases (.github/workflows/release.yml).
+# Build the host (`cargo build --release -p rinka-host`), the engine bindings
+# (`pnpm wasm`) and the app (`pnpm build`) first. Linux produces an unpacked
+# directory that packaging/rpm/rinka.spec turns into an RPM; Windows produces
+# an installer and a zip.
+appId: dev.zaroc.rinka
+productName: Rinka
+directories:
+  output: out
+  buildResources: resources
+files:
+  - package.json
+  - dist/**/*
+  - "!dist/**/*.map"
+# esbuild bundles every dependency; there is nothing native to rebuild.
+npmRebuild: false
+linux:
+  target: dir
+  executableName: rinka
+  extraResources:
+    - from: ../target/release/rinka-host
+      to: rinka-host
+win:
+  target: [nsis, zip]
+  icon: resources/icon.ico
+  # The zip; the installer's name is set below.
+  artifactName: Rinka-${version}-windows-x64.${ext}
+  extraResources:
+    - from: ../target/release/rinka-host.exe
+      to: rinka-host.exe
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  include: ../packaging/windows/installer.nsh
+  artifactName: Rinka-Setup-${version}.${ext}
