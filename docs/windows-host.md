@@ -75,14 +75,83 @@ content on every monitor, shuts down its own host and keeps fixtures/logs
 under ignored `target/windows-smoke/`. `--hold` adds a 30-second inspection
 interval. It does not connect to the user's normal host pipe.
 
+## Workshop discovery and editor check (2026-10-15)
+
+The editor now reads Steam's Windows registry locations and standard install
+directories, then follows `libraryfolders.vdf`. Canonical paths are
+deduplicated without case sensitivity. The previous discovery only checked
+Linux directories and returned no workshop roots on this machine.
+
+- Discovery and an Electron renderer scan found all 39 downloaded workshop
+  items exactly once, plus Wallpaper Engine's built-in assets.
+- The Import screen has a native folder picker for a Steam library, Wallpaper
+  Engine installation, or `431960` workshop folder. It persists the selection
+  in application configuration and can return to automatic discovery.
+- `node --test app/scripts/workshop.test.mjs`: five checks passed, covering
+  registry/VDF discovery, manual locations, invalid and disconnected folders,
+  configuration persistence, and rescans while conversion checks are pending.
+- An isolated Electron smoke run exercised cancel, invalid selection, valid
+  selection through the button, and return to automatic discovery. Native
+  dialog responses were scripted; the operating-system picker itself was not
+  driven. The renderer found 39 items after selection and reset. Its layout
+  capture was inspected locally and is not published.
+- TypeScript checking and editor bundling passed. The shared WASM engine was
+  rebuilt in the development profile using the local Windows tools; Windows
+  application control blocked a release-profile build helper. WebGPU preview
+  initialization succeeded, and the editor connected to the native host on
+  the NVIDIA GeForce RTX 4070 (Vulkan).
+- Thumbnail workers now use `windowsHide: true`, matching import and playback
+  workers. The missing option could open a console after import in either
+  debug or release builds. TypeScript checking, bundling and an isolated
+  Electron smoke run passed; the generated color project received its PNG
+  thumbnail. Console-window visibility was not independently captured.
+
+## Import speed diagnosis (2026-10-15)
+
+Measured sequentially on the same Windows machine using the current
+unoptimized `target/debug/rinka-host.exe`. Ordinary CLI checks took 15.83 s
+(Crimson Sun), 18.41 s (Reze in Rain), and 32.47 s (Nier 2B). Steam discovery
+took 79 ms. A web wallpaper rejected without scene conversion took 100 ms.
+
+A temporary diagnostic executable used a copy of the converter with timers
+around package reading/parsing, texture decoding, PNG asset generation,
+shader translation/annotations, puppet parsing, and output writing. Its
+results closely matched the ordinary CLI:
+
+| Check | Total | PNG asset generation | Texture decoding | Shader translation |
+| --- | --- | --- | --- | --- |
+| Crimson Sun | 15.71 s | 10.34 s | 5.25 s | 0.06 s |
+| Reze in Rain | 18.29 s | 14.64 s | 3.29 s | 0.15 s |
+| Nier 2B | 32.25 s | 24.48 s | 7.01 s | 0.25 s |
+
+The PNG timer covers `SceneBuilder::store`, including compression and its
+small amount of asset bookkeeping. Package reading/parsing took 2–16 ms.
+Importing Crimson Sun into an isolated scratch project took 15.66 s, with
+10.7 ms in output writing. These are local samples with warm filesystem
+caches, not a Windows/Linux or debug/release comparison.
+
+Checks currently perform full conversion, including PNG generation in
+memory; only the final write is skipped. Actual import repeats conversion.
+Reports survive rescans in the editor process, but are not persisted across
+editor restarts, and conversion/shader caches are scoped to one item run.
+The editor checks three items at a time. Particle sprites can also be decoded
+once while testing for sprite sheets and again for their ordinary texture.
+
+The next useful performance work is an optimized native importer build,
+avoiding output PNG generation during checks while retaining asset and
+shader validation, then reusable conversion results with correct source and
+importer-version invalidation. No optimization was applied in this diagnosis.
+The diagnostic executable, raw timing records, and scratch imported project
+remain local under ignored `target/`; no personal artwork was published.
+
 ## Still unverified or incomplete
 
 - Exact desktop pixels and native/preview screen equality. GPU readback and
   successful surface initialization are not screen capture evidence. The
   available window-capture tool did not expose Explorer's wallpaper children.
-- Full editor build/smoke: generated WASM bindings are absent, and this
-  Windows toolchain lacks the WASM target and wasm-bindgen CLI. Linux/Nix
-  checks were not run on this Windows machine.
+- Full editor interaction and exact screen rendering. Editor build and the
+  targeted smoke checks above pass; Linux/Nix checks were not run on this
+  Windows machine.
 - Actual animated-scene pacing, Explorer restart recovery, display hotplug,
   DPI changes, focus/input behavior and the classic WorkerW layout.
 - DX12 presentation. The measured host selected Vulkan.

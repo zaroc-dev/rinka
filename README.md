@@ -95,8 +95,10 @@ not signed, so SmartScreen will warn before the first start.
   that sandbox there (the page sandbox stays on). Set `RINKA_GPU_SANDBOX=1` to
   keep it.
 - Wallpaper Engine import looks for your Steam workshop folder and the
-  Wallpaper Engine install (for built-in effects) automatically. Rinka is not
-  affiliated with Wallpaper Engine.
+  Wallpaper Engine install (for built-in effects) automatically. Use **Locate
+  folder…** on the Import screen to select a Steam library, Wallpaper Engine
+  installation, or `431960` workshop folder manually; Rinka remembers it.
+  Rinka is not affiliated with Wallpaper Engine.
 - Data lives in `~/.config/rinka`.
 
 ## Status

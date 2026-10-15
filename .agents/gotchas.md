@@ -82,6 +82,14 @@ something costs more than a few minutes.
 
 ## Windows host
 
+- **Every background host spawn needs `windowsHide: true`.** The host is a
+  console CLI in both debug and release builds. Import and playback workers
+  hid their consoles, but the thumbnail worker launched after import did not.
+- **Steam locations differ by platform.** Windows workshop discovery needs
+  Steam's `SteamPath`/`InstallPath` registry values and standard Program Files
+  locations, followed by `libraryfolders.vdf`; Linux-only defaults find
+  nothing. Canonicalize paths and deduplicate without case sensitivity on
+  Windows so registry, fallback and VDF aliases do not repeat items.
 - **Win32 functions can need extra feature gates.** `ConnectNamedPipe` needs
   `windows-sys/Win32_System_IO` even for synchronous calls with null OVERLAPPED.
 - **The desktop layout can change when requested.** Check Progman's
@@ -118,6 +126,12 @@ something costs more than a few minutes.
 
 ## Wallpaper Engine formats
 
+- **An import check currently performs full conversion.** Omitting `--out`
+  skips final writing, after texture decoding and PNG encoding already ran.
+  On the Windows debug build these took 98–99% of sampled check time;
+  shader translation and disk writes were small (`docs/windows-host.md`).
+  Report-only optimizations must preserve asset/shader validation while
+  avoiding output encoding; raising concurrency alone repeats the CPU cost.
 - **Volume textures** (flag `0x40`, color LUTs) have an extra depth field in
   the header *and* in every mip header.
 - **Textures are power-of-two padded.** The image is the top-left

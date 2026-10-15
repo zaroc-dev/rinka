@@ -320,6 +320,17 @@ h1 {
   align-items: center;
   gap: 12px;
 }
+.workshop-location {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 22px;
+}
+.workshop-location span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .chips {
   display: flex;
   gap: 4px;

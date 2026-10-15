@@ -243,6 +243,8 @@ export interface Config {
   assignments: Record<string, string>;
   /** Show the tray icon (default true). */
   trayIcon?: boolean;
+  /** Manually selected Steam or Wallpaper Engine folder. */
+  workshopFolder?: string;
 }
 
 export class ConfigStore {
