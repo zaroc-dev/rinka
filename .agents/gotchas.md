@@ -82,6 +82,9 @@ something costs more than a few minutes.
 
 ## Windows host
 
+- **Every background host spawn needs `windowsHide: true`.** The host is a
+  console CLI in both debug and release builds. Import and playback workers
+  hid their consoles, but the thumbnail worker launched after import did not.
 - **Steam locations differ by platform.** Windows workshop discovery needs
   Steam's `SteamPath`/`InstallPath` registry values and standard Program Files
   locations, followed by `libraryfolders.vdf`; Linux-only defaults find

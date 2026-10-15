@@ -100,6 +100,11 @@ Linux directories and returned no workshop roots on this machine.
   application control blocked a release-profile build helper. WebGPU preview
   initialization succeeded, and the editor connected to the native host on
   the NVIDIA GeForce RTX 4070 (Vulkan).
+- Thumbnail workers now use `windowsHide: true`, matching import and playback
+  workers. The missing option could open a console after import in either
+  debug or release builds. TypeScript checking, bundling and an isolated
+  Electron smoke run passed; the generated color project received its PNG
+  thumbnail. Console-window visibility was not independently captured.
 
 ## Import speed diagnosis (2026-10-15)
 

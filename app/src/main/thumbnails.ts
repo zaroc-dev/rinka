@@ -104,7 +104,7 @@ export class Thumbnails {
     if (jobs.length === 0) return;
 
     const results = await new Promise<string>((resolve, reject) => {
-      const child = spawn(bin, ["thumbnail"], { stdio: ["pipe", "pipe", "inherit"] });
+      const child = spawn(bin, ["thumbnail"], { windowsHide: true, stdio: ["pipe", "pipe", "inherit"] });
       let out = "";
       child.stdout.setEncoding("utf8").on("data", (d: string) => (out += d));
       child.on("error", reject);
