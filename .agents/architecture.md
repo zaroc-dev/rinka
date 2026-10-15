@@ -19,10 +19,10 @@ flowchart TD
 
 | Crate | Role | Platform code |
 | --- | --- | --- |
-| `rinka-engine` | Project model (`project.rs`), color (`color.rs`), image decoding (`image.rs`), video conversion (`video.rs`), GPU profile and surfaces (`gpu.rs`), renderer (`render.rs`), scenes and effect passes (`scene.rs`), offscreen capture (`capture.rs`) | none |
+| `rinka-engine` | Project model (`project.rs`), color (`color.rs`), image decoding (`image.rs`), video conversion (`video.rs`), GPU profile and surfaces (`gpu.rs`), renderer (`render.rs`), scenes and effect passes (`scene.rs`), particle format and simulation (`particles.rs`), layer meshes and skinning (`mesh.rs`), offscreen capture (`capture.rs`) | none |
 | `rinka-wasm` | wasm-bindgen wrapper: `Preview` (canvas surface, asset cache, video frames, scenes), `decodeImage`/`decodeImageRaw` for the worker | browser only (`#![cfg(target_arch = "wasm32")]`) |
 | `rinka-host` | `serve` (Wayland/Win32 presenter + control endpoint), `import`, `thumbnail`, `preview` (winit window), `video-timing`, `info` | Linux: Wayland, FFmpeg; Windows: Explorer child windows, named pipe (no video yet) |
-| `rinka-import` | Wallpaper Engine: `pkg.rs`, `tex.rs`, `preprocess.rs`, `shader.rs`, `value.rs`, `assets.rs`, `convert.rs`, `report.rs` | none |
+| `rinka-import` | Wallpaper Engine: `pkg.rs`, `tex.rs`, `preprocess.rs`, `shader.rs`, `value.rs`, `assets.rs`, `convert.rs`, `particles.rs`, `puppet.rs`, `report.rs` | none |
 
 `app/` is the Electron editor: `src/main` (main process), `src/preload`
 (context bridge `window.rinka`), `src/renderer` (Preact UI, preview, decode
@@ -44,9 +44,26 @@ A project is a directory with `project.json` and its assets:
   tile are 1:1 device pixels).
 - `scene`: canvas `width`/`height`, `fit`, `clear_color`, `color_space: gamma`,
   `layers` (bottom to top: texture, origin (center, y down), size, scale,
-  angle (clockwise, radians), color, alpha, brightness, blend, effects),
-  `textures` (path → clamp/nearest), `shaders` (id → WGSL vertex/fragment
-  paths, reflected uniform layout, texture slots).
+  angle (clockwise, radians), color, alpha, brightness, blend, optional
+  `color_blend`, effects, optional `particles`), `textures` (path → clamp/nearest), `shaders` (id →
+  WGSL vertex/fragment paths, reflected uniform layout, texture slots).
+- A layer with `mesh` draws its texture through a triangle mesh
+  (`mesh.rs`): `{source, animations}`, where `source` is a `rinka.mesh`
+  JSON asset (positions in layer pixels around the layer center, y down;
+  uvs; optional skin: four joints/weights per vertex, bones with local bind
+  matrices, animations with 9-float frames per bone) and `animations` are
+  the layers playing on it (`animation` id, `rate`, `blend`, `visible`).
+  Imported from Wallpaper Engine puppet warp (`.mdl`, `rinka-import/src/puppet.rs`).
+  Meshes may name `attachments` (a bone and a matrix relative to it).
+- A layer with `attach: {layer, attachment}` follows that mesh layer's
+  attachment point: its origin, scale and angle are relative to the posed
+  point, in the mesh layer's pixels, and the mesh layer's transform applies
+  on top. A dangling reference fails the scene build.
+- A layer with `particles` is a particle system (`particles.rs`): max count,
+  start time, seed, emitters (disk or box), initializers, operators,
+  renderer (sprite or trail), optional sprite sheet. Its texture is the
+  sprite; origin, scale and angle place the system; `size` is unused. Local
+  space is canvas pixels with y down.
 - Asset paths are relative, `/`-separated, validated (`check_asset_path`); the
   host also refuses symlinks leaving the project.
 - Unknown fields are rejected (`deny_unknown_fields`). Newer versions error
@@ -79,6 +96,26 @@ holds `{version: 1, assignments: {output: projectId}}`; the library is
   `Rgba8Unorm` buffers (≤4096 px); slot 0 is the previous result. Effect
   uniforms are filled by name from the reflected layout: material values once,
   `g_Time` each frame, `g_TextureNResolution`, identity MVP, centered pointer.
+- Mesh layers: the quad's params map unit-quad space to clip; mesh
+  positions are divided by the layer size into that space and drawn indexed,
+  sampling the layer's effect output with the mesh uvs. Skinned meshes are
+  posed on the CPU each frame (`MeshPlayer`, `f64` + `libm`, a pure function
+  of scene time). Attached layers read their point from the same pose and
+  compose their quad's affine map through it.
+- Color-blended layers (`color_blend`: multiply, soft_light, … in
+  `project::ColorBlend`): the scene then composes into an offscreen `work`
+  texture. Before each such layer the target pixels it covers are copied to
+  a `backdrop` texture; `fs_blend` reads the backdrop pixel, applies the
+  formula with the layer's alpha as opacity and replaces the target there.
+  The result is drawn onto the frame at the end. Scenes without color
+  blends draw straight to the frame as before. Blending works on the values
+  as composed (encoded in gamma scenes, as Wallpaper Engine does).
+- Particle layers: each frame the layer's `Simulation` advances in fixed
+  1/60 s steps to the scene time (seeded, `libm` math, so native and
+  preview agree; going back replays, jumps over 30 s restart 30 s before),
+  then every particle becomes one instance (clip-space center, two axes,
+  color, two sprite-sheet frame rectangles and a blend) drawn as a
+  triangle-strip quad with the layer's blend.
 
 ## Host (`rinka-host serve`)
 
@@ -162,9 +199,12 @@ continue from there on `resume`. Assignments made while paused start paused.
    then the install's `assets`.
 3. Decode textures to PNG (cropped, GL channel meaning, first sprite frame).
 4. Convert objects. Image layers go through model → material
-   (`genericimage*`), with parent transforms composed and y flipped. Particles,
-   text, sound, models, lights and composition layers are reported
-   unsupported.
+   (`genericimage*`), with parent transforms composed and y flipped. Solid
+   layers (`flat`) become a white 1×1 texture tinted with the object's
+   color. Particle objects become one particle layer per system plus static
+   children (`rinka-import/src/particles.rs`, sources in
+   `docs/m4-particles.md`). Text, sound, models, lights and composition
+   layers are reported unsupported.
 5. For each effect pass: merge material and scene overrides; combos from
    defaults, material, scene and provided textures; translate (cached by
    shader + combos).

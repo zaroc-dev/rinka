@@ -7,6 +7,8 @@ pub mod capture;
 pub mod color;
 pub mod gpu;
 pub mod image;
+pub mod mesh;
+pub mod particles;
 pub mod project;
 pub mod render;
 pub mod scene;

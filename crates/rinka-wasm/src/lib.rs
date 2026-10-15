@@ -123,6 +123,8 @@ pub struct Preview {
     video_yuv: Option<VideoTexture>,
     /// Scene shader sources by key.
     shader_sources: HashMap<String, String>,
+    /// Scene mesh sources (`rinka.mesh` JSON) by key.
+    mesh_sources: HashMap<String, String>,
 }
 
 #[wasm_bindgen]
@@ -173,6 +175,7 @@ impl Preview {
             video_frame: None,
             video_yuv: None,
             shader_sources: HashMap::new(),
+            mesh_sources: HashMap::new(),
         })
     }
 
@@ -231,6 +234,12 @@ impl Preview {
         self.shader_sources.insert(key.to_owned(), source);
     }
 
+    /// Adds a scene layer mesh (`rinka.mesh` JSON) under `key`.
+    #[wasm_bindgen(js_name = addMeshSource)]
+    pub fn add_mesh_source(&mut self, key: &str, source: String) {
+        self.mesh_sources.insert(key.to_owned(), source);
+    }
+
     /// Whether the shown project changes over time (an animated scene).
     #[wasm_bindgen(js_name = isAnimated)]
     pub fn is_animated(&self) -> bool {
@@ -264,12 +273,32 @@ impl Preview {
             }
             for shader in content.shaders.values() {
                 for path in [&shader.vertex, &shader.fragment] {
+                    // Shaders and layers may share a file; it is added once.
+                    if assets.shaders.contains_key(path) {
+                        continue;
+                    }
                     let key = format!("{asset_prefix}{path}");
                     let source = self.shader_sources.remove(&key).ok_or_else(|| {
                         JsError::new(&format!("scene shader {key} was not added"))
                     })?;
                     assets.shaders.insert(path.clone(), source);
                 }
+            }
+            for path in content
+                .layers
+                .iter()
+                .filter_map(|l| Some(&l.mesh.as_ref()?.source))
+            {
+                if assets.meshes.contains_key(path) {
+                    continue;
+                }
+                let key = format!("{asset_prefix}{path}");
+                let source = self
+                    .mesh_sources
+                    .remove(&key)
+                    .ok_or_else(|| JsError::new(&format!("scene mesh {key} was not added")))?;
+                let mesh = rinka_engine::mesh::Mesh::from_json(&source).map_err(to_js)?;
+                assets.meshes.insert(path.clone(), mesh);
             }
             self.target
                 .set_project(&self.device, &self.renderer, &project, None);

@@ -12,6 +12,9 @@ struct Job {
     out: PathBuf,
     width: u32,
     height: u32,
+    /// Scene time in seconds (animated scenes).
+    #[serde(default)]
+    time: f64,
 }
 
 #[derive(Serialize)]
@@ -139,7 +142,7 @@ fn render_one(
         renderer,
         &mut target,
         (job.width, job.height),
-        0.0,
+        job.time,
     );
 
     let tmp = job.out.with_extension("png.tmp");

@@ -785,7 +785,7 @@ impl Target {
         encoder: &mut wgpu::CommandEncoder,
         frame: &Frame<'_>,
     ) {
-        if let Some(scene) = &self.scene {
+        if let Some(scene) = &mut self.scene {
             scene.render(
                 queue,
                 encoder,

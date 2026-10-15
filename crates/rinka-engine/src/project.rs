@@ -228,8 +228,46 @@ pub struct Layer {
     pub brightness: f32,
     #[serde(default)]
     pub blend: LayerBlend,
+    /// Blends the layer's color with what is below it by a formula instead
+    /// of `blend`; the layer's alpha is the blend's opacity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_blend: Option<ColorBlend>,
     #[serde(default)]
     pub effects: Vec<Effect>,
+    /// Makes this a particle layer: the system's sprites use `texture`, and
+    /// `origin`, `scale` and `angle` place the system. `size` is unused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub particles: Option<crate::particles::Particles>,
+    /// Draws the texture through a mesh instead of as a quad.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesh: Option<LayerMesh>,
+    /// Follows an attachment point of another layer's mesh. The layer's
+    /// origin, scale and angle are then relative to that point, in the mesh
+    /// layer's pixels (y down), and the mesh layer's transform applies on
+    /// top.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attach: Option<LayerAttach>,
+}
+
+/// Where an attached layer hangs (see [`Layer::attach`]).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LayerAttach {
+    /// Id of a layer with a mesh.
+    pub layer: String,
+    /// Name of one of its mesh's attachment points.
+    pub attachment: String,
+}
+
+/// A layer's mesh: the asset and the animations playing on its skeleton.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LayerMesh {
+    /// Mesh asset ([`crate::mesh::Mesh`], project path).
+    pub source: String,
+    /// Bottom to top; a higher layer takes its blend first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub animations: Vec<crate::mesh::MeshAnimation>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -241,6 +279,63 @@ pub enum LayerBlend {
     Additive,
     /// Replaces what is below.
     Opaque,
+}
+
+/// Color blend modes, with `b` the color below and `l` the layer's; the
+/// result is mixed with `b` by the layer's alpha unless noted. Values are
+/// blended as the scene composes them (encoded for gamma scenes).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ColorBlend {
+    /// min(b, l)
+    Darken,
+    /// b · l
+    Multiply,
+    /// 1 − (1 − b) / l
+    ColorBurn,
+    /// max(b + l − 1, 0)
+    Subtract,
+    /// min(b, l), ignoring alpha.
+    Min,
+    /// max(b, l)
+    Lighten,
+    /// 1 − (1 − b)(1 − l)
+    Screen,
+    /// b / (1 − l)
+    ColorDodge,
+    /// min(b + l, 1)
+    Add,
+    /// max(b, l), ignoring alpha.
+    Max,
+    Overlay,
+    SoftLight,
+    HardLight,
+    VividLight,
+    LinearLight,
+    PinLight,
+    HardMix,
+    /// |b − l|
+    Difference,
+    /// b + l − 2bl
+    Exclusion,
+    /// b² / (1 − l)
+    Reflect,
+    /// l² / (1 − b)
+    Glow,
+    /// min(b, l) − max(b, l) + 1
+    Phoenix,
+    /// (b + l) / 2
+    Average,
+    /// 1 − |1 − b − l|
+    Negation,
+    Hue,
+    Saturation,
+    Color,
+    Luminosity,
+    /// max(b.r, b.g, b.b) · l
+    Tint,
+    /// b + b · l
+    Brighten,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

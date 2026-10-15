@@ -100,6 +100,7 @@ fn translated_effect_runs_on_a_layer() {
             alpha: 1.0,
             brightness: 1.0,
             blend: LayerBlend::Translucent,
+            color_blend: None,
             effects: vec![Effect {
                 id: "2".into(),
                 name: "invert".into(),
@@ -110,6 +111,9 @@ fn translated_effect_runs_on_a_layer() {
                     values: BTreeMap::from([("g_Amount".into(), vec![1.0])]),
                 }],
             }],
+            particles: None,
+            mesh: None,
+            attach: None,
         }],
         textures: BTreeMap::from([
             (
@@ -138,6 +142,7 @@ fn translated_effect_runs_on_a_layer() {
             ("shaders/invert.vert.wgsl".into(), t.vertex.clone()),
             ("shaders/invert.frag.wgsl".into(), t.fragment.clone()),
         ]),
+        meshes: HashMap::new(),
     };
     let scene = GpuScene::new(
         &device,

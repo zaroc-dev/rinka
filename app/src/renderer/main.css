@@ -1174,6 +1174,8 @@ h1 {
   display: grid;
   gap: 3px;
   color: var(--text);
+  /* Notes quote asset paths, which would otherwise widen the sheet. */
+  overflow-wrap: anywhere;
 }
 .report-notes li::marker {
   color: var(--muted);

@@ -384,12 +384,14 @@ function startScene(): void {
   sceneLoop = requestAnimationFrame(tick);
 }
 
-/** Fetches and decodes a scene's textures and shader sources. */
+/** Fetches and decodes a scene's textures, shader sources and layer meshes. */
 async function loadScene(entry: LibraryEntry, project: Project, p: Preview, token: number): Promise<boolean> {
   if (project.content.type !== "scene") return false;
   const base = `rinka://app/library/${entry.id}/`;
   const shaders = Object.values(project.content.shaders).flatMap((s) => [s.vertex, s.fragment]);
   const texts = await Promise.all(shaders.map(async (path) => [path, await (await fetch(base + path)).text()] as const));
+  const meshPaths = [...new Set(project.content.layers.flatMap((l) => (l.mesh ? [l.mesh.source] : [])))];
+  const meshes = await Promise.all(meshPaths.map(async (path) => [path, await (await fetch(base + path)).text()] as const));
   const textures = Object.keys(project.content.textures);
   const decoded = await Promise.all(
     textures.map(async (path) => {
@@ -399,6 +401,7 @@ async function loadScene(entry: LibraryEntry, project: Project, p: Preview, toke
   );
   if (token !== generation) return false;
   for (const [path, text] of texts) p.addShaderSource(entry.assetPrefix + path, text);
+  for (const [path, text] of meshes) p.addMeshSource(entry.assetPrefix + path, text);
   for (const [path, d] of decoded) {
     p.addDecodedAsset(entry.assetPrefix + path, d.width, d.height, d.sourceWidth, d.sourceHeight, d.format, new Uint8Array(d.pixels));
   }

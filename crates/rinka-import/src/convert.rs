@@ -1,17 +1,20 @@
 //! Converts Wallpaper Engine workshop items into Rinka projects.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
+use rinka_engine::mesh::MeshAnimation;
 use rinka_engine::project::{
-    Content, Effect, EffectPass, Fit, Layer, LayerBlend, Project, Provenance, SceneColorSpace,
-    SceneContent, ShaderInfo, TextureInfo, UniformInfo,
+    ColorBlend, Content, Effect, EffectPass, Fit, Layer, LayerAttach, LayerBlend, LayerMesh,
+    Project, Provenance, SceneColorSpace, SceneContent, ShaderInfo, TextureInfo, UniformInfo,
 };
 use serde_json::Value;
 
 use crate::assets::Resolver;
+use crate::particles::{self, Overrides};
 use crate::pkg::Package;
+use crate::puppet;
 use crate::report::{Item, Report, Source, Status};
 use crate::shader;
 use crate::tex;
@@ -246,6 +249,61 @@ struct SceneBuilder {
     translations: HashMap<String, Result<String, String>>,
 }
 
+/// An object's `colorBlendMode` (Wallpaper Engine's `BLENDMODE` numbers):
+/// a color blend, or for mode 31 (below + layer · alpha) additive blending.
+fn color_blend(obj: &Value, item: &mut Item) -> (Option<ColorBlend>, bool) {
+    let Some(v) = obj.get("colorBlendMode") else {
+        return (None, false);
+    };
+    let (_, extras) = value::unwrap(v);
+    if extras.script || extras.animation {
+        item.partial("colorBlendMode is animated or scripted; its static value is used");
+    }
+    use ColorBlend as C;
+    let mode = value::float(v).unwrap_or(0.0) as i64;
+    let blend = match mode {
+        0 => return (None, false),
+        31 => return (None, true),
+        1 => C::Darken,
+        2 => C::Multiply,
+        3 => C::ColorBurn,
+        4 | 20 => C::Subtract,
+        5 => C::Min,
+        6 => C::Lighten,
+        7 => C::Screen,
+        8 => C::ColorDodge,
+        9 => C::Add,
+        10 => C::Max,
+        11 => C::Overlay,
+        12 => C::SoftLight,
+        13 => C::HardLight,
+        14 => C::VividLight,
+        15 => C::LinearLight,
+        16 => C::PinLight,
+        17 => C::HardMix,
+        18 => C::Difference,
+        19 => C::Exclusion,
+        21 => C::Reflect,
+        22 => C::Glow,
+        23 => C::Phoenix,
+        24 => C::Average,
+        25 => C::Negation,
+        26 => C::Hue,
+        27 => C::Saturation,
+        28 => C::Color,
+        29 => C::Luminosity,
+        30 => C::Tint,
+        32 => C::Brighten,
+        other => {
+            item.partial(format!(
+                "color blend mode {other} is unknown; the layer blends normally"
+            ));
+            return (None, false);
+        }
+    };
+    (Some(blend), false)
+}
+
 fn local_transform(obj: &Value, item: &mut Item) -> Transform {
     let note = |item: &mut Item, field: &str, v: &Value| {
         let (_, extras) = value::unwrap(v);
@@ -360,7 +418,20 @@ fn convert_scene(
         .iter()
         .filter_map(|o| Some((o.get("id")?.as_i64()?, o)))
         .collect();
+    // Plain parenting. Puppet attachments are only followed by image layers
+    // attached directly (see `SceneBuilder::attachment`).
     let world = |obj: &Value, item: &mut Item| -> Transform {
+        let attached = |o: &Value| {
+            o.get("attachment")
+                .and_then(Value::as_str)
+                .filter(|n| !n.is_empty())
+                .map(str::to_owned)
+        };
+        if let Some(name) = attached(obj) {
+            item.partial(format!(
+                "puppet attachment {name} is not followed; placed as a plain child"
+            ));
+        }
         let mut t = local_transform(obj, item);
         let mut parent = obj.get("parent").and_then(Value::as_i64);
         let mut guard = 0;
@@ -368,6 +439,11 @@ fn convert_scene(
             && let Some(p) = by_id.get(&pid)
             && guard < 32
         {
+            if let Some(name) = attached(p) {
+                item.partial(format!(
+                    "parent {pid} hangs from puppet attachment {name}, which this object does not follow"
+                ));
+            }
             let mut scratch = Item::new("", "", "");
             t = Transform::compose(local_transform(p, &mut scratch), t);
             parent = p.get("parent").and_then(Value::as_i64);
@@ -377,6 +453,8 @@ fn convert_scene(
     };
 
     let mut layers = Vec::new();
+    // Attached layer id → its plain world transform and report source.
+    let mut attach_fallback: HashMap<String, (Transform, String)> = HashMap::new();
     for obj in &objects {
         let id = obj.get("id").map_or_else(|| "?".into(), |v| v.to_string());
         let name = obj
@@ -388,10 +466,26 @@ fn convert_scene(
         let kind_of = |k: &str| obj.get(k).is_some_and(|v| !v.is_null());
         if kind_of("image") {
             let mut item = Item::new(&source, &name, "image layer");
-            let transform = world(obj, &mut item);
-            match builder.image_layer(obj, &id, &name, transform, height as f32, &mut item, report)
+            let attach = builder.attachment(obj, &by_id);
+            let transform = match &attach {
+                // Relative to the attachment point, in the puppet's pixels;
+                // the parents still decide visibility.
+                Some(_) => {
+                    let mut scratch = Item::new("", "", "");
+                    let world = world(obj, &mut scratch);
+                    attach_fallback.insert(id.clone(), (world, source.clone()));
+                    Transform {
+                        visible: world.visible,
+                        ..local_transform(obj, &mut item)
+                    }
+                }
+                None => world(obj, &mut item),
+            };
+            let canvas_height = if attach.is_some() { 0.0 } else { height as f32 };
+            match builder.image_layer(obj, &id, &name, transform, canvas_height, &mut item, report)
             {
-                Some(layer) => {
+                Some(mut layer) => {
+                    layer.attach = attach;
                     item.native = Some(format!("layer {}", layer.id));
                     layers.push(layer);
                 }
@@ -404,9 +498,27 @@ fn convert_scene(
             report.push(item);
             continue;
         }
-        let (kind, why) = if kind_of("particle") {
-            ("particle system", "particle systems are not supported yet")
-        } else if kind_of("sound") {
+        if kind_of("particle") {
+            let mut item = Item::new(&source, &name, "particle system");
+            let transform = world(obj, &mut item);
+            let converted =
+                builder.particle_layers(obj, &id, &name, transform, height as f32, &mut item);
+            if !converted.is_empty() {
+                item.native = Some(
+                    converted
+                        .iter()
+                        .map(|l| format!("layer {}", l.id))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                );
+                layers.extend(converted);
+            } else if item.status != Status::Unsupported {
+                item.unsupported("could not be converted");
+            }
+            report.push(item);
+            continue;
+        }
+        let (kind, why) = if kind_of("sound") {
             ("sound", "sound playback is not supported")
         } else if kind_of("text") {
             ("text", "text layers are not supported yet")
@@ -433,6 +545,30 @@ fn convert_scene(
         report.push(item);
     }
 
+    // An attachment needs its puppet as a mesh layer; without one the layer
+    // is placed as a plain child.
+    let meshes: HashSet<String> = layers
+        .iter()
+        .filter(|l| l.mesh.is_some())
+        .map(|l| l.id.clone())
+        .collect();
+    for layer in &mut layers {
+        let Some(a) = layer.attach.take_if(|a| !meshes.contains(&a.layer)) else {
+            continue;
+        };
+        let (t, source) = &attach_fallback[&layer.id];
+        layer.origin = [t.origin[0], height as f32 - t.origin[1]];
+        layer.scale = t.scale;
+        layer.angle = -t.angle;
+        if let Some(item) = report.items.iter_mut().find(|i| &i.source == source) {
+            item.partial(format!(
+                "attachment {} does not follow its puppet, which is not converted",
+                a.attachment
+            ));
+        }
+        report.finish();
+    }
+
     let content = SceneContent {
         width,
         height,
@@ -451,15 +587,56 @@ fn convert_scene(
     }))
 }
 
+/// A sprite sheet's project path and frame rectangles.
+type Sheet = (String, Vec<[f32; 4]>);
+
+/// What a particle object applies to each of its systems.
+struct ParticleStyle<'a> {
+    name: &'a str,
+    overrides: Overrides,
+    color: [f32; 3],
+    brightness: f32,
+    canvas_height: f32,
+}
+
+/// A stable seed from a layer id, so re-importing gives the same particles.
+fn seed(layer_id: &str) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    layer_id.hash(&mut h);
+    h.finish()
+}
+
 /// Uniforms the engine provides; anything else not set by the material
 /// reads zero.
-const PROVIDED: &[&str] = &["g_Time", "g_ModelViewProjectionMatrix"];
+const PROVIDED: &[&str] = &[
+    "g_Time",
+    "g_ModelViewProjectionMatrix",
+    "g_EffectTextureProjectionMatrix",
+    "g_EffectTextureProjectionMatrixInverse",
+    "g_Screen",
+];
 
 impl SceneBuilder {
     /// Decodes `materials/<name>.tex` (or an existing path) into a PNG
     /// asset and returns its project path.
     fn texture(&mut self, name: &str, effect_dir: Option<&str>) -> Result<String, String> {
-        let key = format!("{}|{name}", effect_dir.unwrap_or(""));
+        self.texture_as(name, effect_dir, false)
+    }
+
+    /// Like [`Self::texture`], with one- and two-channel formats rewritten
+    /// for particle sprites ([`tex::as_particle_sprite`]).
+    fn particle_texture(&mut self, name: &str) -> Result<String, String> {
+        self.texture_as(name, None, true)
+    }
+
+    fn texture_as(
+        &mut self,
+        name: &str,
+        effect_dir: Option<&str>,
+        particle: bool,
+    ) -> Result<String, String> {
+        let kind = if particle { "particle|" } else { "" };
+        let key = format!("{kind}{}|{name}", effect_dir.unwrap_or(""));
         if let Some(p) = self.texture_paths.get(&key) {
             return Ok(p.clone());
         }
@@ -481,6 +658,7 @@ impl SceneBuilder {
             .first()
             .cloned()
             .ok_or_else(|| format!("texture {name} has no image"))?;
+        let flags = t.flags;
         if let Some(frame) = t.frames.first() {
             // Animated: keep the first frame.
             let img = &t.images[frame.image.min(t.images.len() - 1)];
@@ -493,6 +671,20 @@ impl SceneBuilder {
             )
             .to_image();
         }
+        if particle {
+            tex::as_particle_sprite(t.format, &mut image);
+        }
+        self.store(&key, name, &image, flags)
+    }
+
+    /// Writes a decoded texture as a PNG asset and returns its project path.
+    fn store(
+        &mut self,
+        key: &str,
+        name: &str,
+        image: &image::RgbaImage,
+        flags: u32,
+    ) -> Result<String, String> {
         let mut png = Vec::new();
         image::codecs::png::PngEncoder::new_with_quality(
             &mut png,
@@ -517,12 +709,323 @@ impl SceneBuilder {
         self.textures.insert(
             project_path.clone(),
             TextureInfo {
-                clamp: t.flags & tex::FLAG_CLAMP_UVS != 0,
-                nearest: t.flags & tex::FLAG_NO_INTERPOLATION != 0,
+                clamp: flags & tex::FLAG_CLAMP_UVS != 0,
+                nearest: flags & tex::FLAG_NO_INTERPOLATION != 0,
             },
         );
-        self.texture_paths.insert(key, project_path.clone());
+        self.texture_paths
+            .insert(key.to_owned(), project_path.clone());
         Ok(project_path)
+    }
+
+    /// A particle sprite sheet: the whole sheet as one asset (rewritten as
+    /// [`Self::particle_texture`] does) and its frames as texture-coordinate
+    /// rectangles. `None` for a single-image texture.
+    fn sheet(&mut self, name: &str) -> Result<Option<Sheet>, String> {
+        let path = if name.ends_with(".tex") {
+            name.to_owned()
+        } else {
+            format!("materials/{name}.tex")
+        };
+        let bytes = self
+            .resolver
+            .read(&path, None)
+            .ok_or_else(|| format!("texture {name} not found"))?;
+        let t = tex::decode(&bytes).map_err(|e| format!("texture {name}: {e}"))?;
+        if t.frames.is_empty() {
+            return Ok(None);
+        }
+        if t.frames.iter().any(|f| f.image != 0) {
+            return Err(format!("sprite sheet {name} spans several images"));
+        }
+        let mut image = t
+            .images
+            .first()
+            .cloned()
+            .ok_or_else(|| format!("texture {name} has no image"))?;
+        tex::as_particle_sprite(t.format, &mut image);
+        let (w, h) = (image.width() as f32, image.height() as f32);
+        let frames = t
+            .frames
+            .iter()
+            .map(|f| [f.x / w, f.y / h, f.width / w, f.height / h])
+            .collect();
+        let key = format!("sheet|{name}");
+        let project_path = match self.texture_paths.get(&key) {
+            Some(p) => p.clone(),
+            None => self.store(&key, name, &image, t.flags)?,
+        };
+        Ok(Some((project_path, frames)))
+    }
+
+    /// A 1×1 white texture for solid layers.
+    fn white(&mut self) -> String {
+        let path = "textures/white.png".to_owned();
+        if !self.files.contains_key(&path) {
+            let mut png = Vec::new();
+            image::codecs::png::PngEncoder::new(&mut png)
+                .write_image(&[255; 4], 1, 1, image::ExtendedColorType::Rgba8)
+                .expect("encoding a 1×1 PNG");
+            self.files.insert(path.clone(), png);
+            self.textures.insert(
+                path.clone(),
+                TextureInfo {
+                    clamp: true,
+                    nearest: false,
+                },
+            );
+        }
+        path
+    }
+
+    /// A solid-color layer (Wallpaper Engine's `flat` shader): the
+    /// object's color and alpha over its size.
+    #[allow(clippy::too_many_arguments)]
+    fn solid_layer(
+        &mut self,
+        obj: &Value,
+        id: &str,
+        name: &str,
+        t: Transform,
+        canvas_height: f32,
+        pass: &Value,
+        item: &mut Item,
+        report: &mut Report,
+    ) -> Layer {
+        let get = |k: &str| obj.get(k);
+        for k in ["color", "alpha"] {
+            if let Some(v) = get(k) {
+                let (_, extras) = value::unwrap(v);
+                if extras.script || extras.animation {
+                    item.partial(format!(
+                        "{k} is animated or scripted; its static value is used"
+                    ));
+                }
+            }
+        }
+        let effects = get("effects")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        for effect in &effects {
+            let mut effect_item = Item::new(
+                format!(
+                    "object {id} › effect {}",
+                    effect.get("id").map_or("?".into(), |v| v.to_string())
+                ),
+                effect.get("file").and_then(Value::as_str).unwrap_or("?"),
+                "effect",
+            );
+            effect_item.unsupported("effects on solid layers are not supported yet");
+            item.partial(format!("effect {} is missing", effect_item.name));
+            report.push(effect_item);
+        }
+        // A solid layer's effects make what it shows (audio bars, tints);
+        // without them it would be a bare rectangle, so it starts hidden.
+        let hidden = !effects.is_empty() && t.visible;
+        if hidden {
+            item.partial("hidden, because it would show as a plain rectangle without its effects");
+        }
+        let blend = match pass
+            .get("blending")
+            .and_then(Value::as_str)
+            .unwrap_or("translucent")
+        {
+            "additive" => LayerBlend::Additive,
+            "normal" | "disabled" => LayerBlend::Opaque,
+            _ => LayerBlend::Translucent,
+        };
+        let (color_blend, additive) = color_blend(obj, item);
+        let blend = if additive {
+            LayerBlend::Additive
+        } else {
+            blend
+        };
+        Layer {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            visible: t.visible && !hidden,
+            texture: self.white(),
+            origin: [t.origin[0], canvas_height - t.origin[1]],
+            size: get("size")
+                .and_then(value::vec_n::<2>)
+                .unwrap_or([256.0, 256.0]),
+            scale: t.scale,
+            angle: -t.angle,
+            color: get("color").and_then(value::vec_n::<3>).unwrap_or([1.0; 3]),
+            alpha: get("alpha").and_then(value::float).unwrap_or(1.0),
+            brightness: get("brightness").and_then(value::float).unwrap_or(1.0),
+            blend,
+            color_blend,
+            effects: Vec::new(),
+            particles: None,
+            mesh: None,
+            attach: None,
+        }
+    }
+
+    /// Converts a particle object into one layer per system: the object's
+    /// system and, after it, its static children.
+    fn particle_layers(
+        &mut self,
+        obj: &Value,
+        id: &str,
+        name: &str,
+        t: Transform,
+        canvas_height: f32,
+        item: &mut Item,
+    ) -> Vec<Layer> {
+        let Some(path) = obj.get("particle").and_then(Value::as_str) else {
+            return Vec::new();
+        };
+        if value::float(obj.get("colorBlendMode").unwrap_or(&Value::Null)).unwrap_or(0.0) != 0.0 {
+            item.partial("color blend modes on particles are not supported; they blend normally");
+        }
+        let ov = obj.get("instanceoverride");
+        let overrides = ov.map(Overrides::read).unwrap_or_default();
+        let field = |k: &str| ov.and_then(|o| o.get(k));
+        let color = field("colorn")
+            .and_then(value::vec_n::<3>)
+            .or_else(|| {
+                // Seen both as 0..1 and as 0..255.
+                field("color").and_then(value::vec_n::<3>).map(|c| {
+                    if c.iter().any(|v| *v > 1.0) {
+                        c.map(|v| v / 255.0)
+                    } else {
+                        c
+                    }
+                })
+            })
+            .unwrap_or([1.0; 3]);
+        let brightness = field("brightness").and_then(value::float).unwrap_or(1.0);
+        let style = ParticleStyle {
+            name,
+            overrides,
+            color,
+            brightness,
+            canvas_height,
+        };
+        let mut layers = Vec::new();
+        self.particle_system(path, t, id.to_owned(), &style, item, &mut layers, 0);
+        layers
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn particle_system(
+        &mut self,
+        path: &str,
+        t: Transform,
+        layer_id: String,
+        style: &ParticleStyle,
+        item: &mut Item,
+        layers: &mut Vec<Layer>,
+        depth: u32,
+    ) {
+        if depth > 4 {
+            item.partial(format!("{path}: child systems nest too deeply"));
+            return;
+        }
+        let Some(def) = self.resolver.read_json(path, None) else {
+            item.unsupported(format!("particle definition {path} not found"));
+            return;
+        };
+        let material = def
+            .get("material")
+            .and_then(Value::as_str)
+            .and_then(|m| self.resolver.read_json(m, None));
+        let pass = material
+            .as_ref()
+            .and_then(|m| m.get("passes")?.get(0))
+            .cloned()
+            .unwrap_or(Value::Null);
+        let combos = pass.get("combos").and_then(Value::as_object);
+        for combo in ["REFRACT", "LIGHTING"] {
+            if combos
+                .and_then(|c| c.get(combo))
+                .and_then(value::float)
+                .unwrap_or(0.0)
+                != 0.0
+            {
+                item.partial(format!("{combo} particles are drawn without it"));
+            }
+        }
+        let blend = match pass
+            .get("blending")
+            .and_then(Value::as_str)
+            .unwrap_or("translucent")
+        {
+            "additive" => LayerBlend::Additive,
+            "normal" | "disabled" => LayerBlend::Opaque,
+            _ => LayerBlend::Translucent,
+        };
+        let overbright = pass
+            .get("constantshadervalues")
+            .and_then(|c| c.get("ui_editor_properties_overbright"))
+            .and_then(value::float)
+            .unwrap_or(1.0);
+        let texture_name = pass
+            .get("textures")
+            .and_then(|t| t.get(0))
+            .and_then(Value::as_str)
+            .unwrap_or("util/white");
+        let (texture, frames) = match self.sheet(texture_name) {
+            Ok(Some((path, frames))) => (path, Some(frames)),
+            other => {
+                if let Err(e) = other {
+                    item.partial(format!("{e}; particles show its first frame"));
+                }
+                match self.particle_texture(texture_name) {
+                    Ok(p) => (p, None),
+                    Err(e) => {
+                        item.partial(format!("{path}: {e}; the system is missing"));
+                        return;
+                    }
+                }
+            }
+        };
+        let Some(mut converted) = particles::convert(&def, &style.overrides, seed(&layer_id), item)
+        else {
+            return;
+        };
+        if let Some(frames) = frames {
+            converted.system.sheet = Some(particles::sheet(&def, frames));
+        }
+        layers.push(Layer {
+            id: layer_id.clone(),
+            name: style.name.to_owned(),
+            visible: t.visible,
+            texture,
+            origin: [t.origin[0], style.canvas_height - t.origin[1]],
+            size: [0.0, 0.0],
+            scale: t.scale,
+            angle: -t.angle,
+            color: style.color,
+            alpha: 1.0,
+            brightness: overbright * style.brightness,
+            blend,
+            color_blend: None,
+            effects: Vec::new(),
+            particles: Some(converted.system),
+            mesh: None,
+            attach: None,
+        });
+        for (i, child) in converted.children.iter().enumerate() {
+            let local = Transform {
+                origin: [child.origin[0], child.origin[1]],
+                scale: [child.scale[0], child.scale[1]],
+                angle: child.angles[2],
+                visible: true,
+            };
+            self.particle_system(
+                &child.path,
+                Transform::compose(t, local),
+                format!("{layer_id}.{i}"),
+                style,
+                item,
+                layers,
+                depth + 1,
+            );
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -555,6 +1058,9 @@ impl SceneBuilder {
             .cloned()
             .unwrap_or(Value::Null);
         let shader = pass.get("shader").and_then(Value::as_str).unwrap_or("");
+        if shader == "flat" {
+            return Some(self.solid_layer(obj, id, name, t, canvas_height, &pass, item, report));
+        }
         if !shader.starts_with("genericimage") {
             item.unsupported(format!("custom layer shader {shader} is not supported"));
             return None;
@@ -591,6 +1097,12 @@ impl SceneBuilder {
                 item.partial(format!("blending {other} is treated as translucent"));
                 LayerBlend::Translucent
             }
+        };
+        let (color_blend, additive) = color_blend(obj, item);
+        let blend = if additive {
+            LayerBlend::Additive
+        } else {
+            blend
         };
         let Some(texture_name) = pass
             .get("textures")
@@ -637,9 +1149,6 @@ impl SceneBuilder {
                 }
             }
         }
-        if get("colorBlendMode").and_then(value::float).unwrap_or(0.0) != 0.0 {
-            item.partial("color blend modes are not supported; the layer blends normally");
-        }
         match get("alignment").and_then(Value::as_str).unwrap_or("center") {
             "center" => {}
             other => item.partial(format!("alignment {other} is treated as centered")),
@@ -647,12 +1156,18 @@ impl SceneBuilder {
         if get("perspective").and_then(value::boolean).unwrap_or(false) {
             item.partial("perspective layers are drawn flat");
         }
-        if get("animationlayers")
-            .and_then(Value::as_array)
-            .is_some_and(|a| !a.is_empty())
-        {
-            item.partial("puppet animation is not supported");
-        }
+        let mesh = match model.get("puppet").and_then(Value::as_str) {
+            Some(path) => self.puppet(path, obj, item),
+            None => {
+                if get("animationlayers")
+                    .and_then(Value::as_array)
+                    .is_some_and(|a| !a.is_empty())
+                {
+                    item.partial("animation layers without a puppet model are ignored");
+                }
+                None
+            }
+        };
 
         let mut effects = Vec::new();
         for effect in get("effects")
@@ -703,8 +1218,146 @@ impl SceneBuilder {
             alpha,
             brightness,
             blend,
+            color_blend,
             effects,
+            particles: None,
+            mesh,
+            attach: None,
         })
+    }
+
+    /// The puppet attachment point `obj` hangs from, if its parent's puppet
+    /// has it.
+    fn attachment(&self, obj: &Value, by_id: &HashMap<i64, &Value>) -> Option<LayerAttach> {
+        let name = obj
+            .get("attachment")
+            .and_then(Value::as_str)
+            .filter(|n| !n.is_empty())?;
+        let parent = obj.get("parent").and_then(Value::as_i64);
+        let points = parent
+            .and_then(|p| by_id.get(&p))
+            .and_then(|p| self.attachment_points(p))
+            .unwrap_or_default();
+        match parent {
+            Some(p) if points.iter().any(|n| n == name) => Some(LayerAttach {
+                layer: p.to_string(),
+                attachment: name.to_owned(),
+            }),
+            // `world` reports it.
+            _ => None,
+        }
+    }
+
+    fn attachment_points(&self, obj: &Value) -> Option<Vec<String>> {
+        let model = self.resolver.read_json(obj.get("image")?.as_str()?, None)?;
+        let bytes = self.resolver.read(model.get("puppet")?.as_str()?, None)?;
+        let puppet = puppet::parse(&bytes).ok()?;
+        Some(
+            puppet
+                .mesh
+                .attachments
+                .into_iter()
+                .map(|a| a.name)
+                .collect(),
+        )
+    }
+
+    /// Converts a puppet warp model into a mesh asset with the object's
+    /// animation layers. `None` (the layer stays a quad) if it cannot be read.
+    fn puppet(&mut self, path: &str, obj: &Value, item: &mut Item) -> Option<LayerMesh> {
+        let Some(bytes) = self.resolver.read(path, None) else {
+            item.partial(format!(
+                "puppet model {path} not found; the image is drawn flat"
+            ));
+            return None;
+        };
+        let puppet = match puppet::parse(&bytes) {
+            Ok(p) => p,
+            Err(e) => {
+                item.partial(format!("puppet model {path}: {e}; the image is drawn flat"));
+                return None;
+            }
+        };
+        let mut animations = Vec::new();
+        for layer in obj
+            .get("animationlayers")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let Some(id) = layer.get("animation").and_then(Value::as_i64) else {
+                continue;
+            };
+            let name = layer.get("name").and_then(Value::as_str).unwrap_or("?");
+            if !puppet.mesh.animations.iter().any(|a| a.id == id) {
+                item.partial(format!("puppet animation {name} is not in the model"));
+                continue;
+            }
+            let field = |k: &str| layer.get(k).and_then(value::float);
+            for k in ["rate", "blend", "visible"] {
+                if let Some(v) = layer.get(k) {
+                    let (_, extras) = value::unwrap(v);
+                    if extras.script || extras.animation {
+                        item.partial(format!(
+                            "puppet animation {name}: {k} is animated or scripted; its static value is used"
+                        ));
+                    }
+                }
+            }
+            if layer.get("additive").and_then(value::boolean) == Some(false) {
+                item.partial(format!(
+                    "puppet animation {name} is not additive; it blends as if it were"
+                ));
+            }
+            if layer.get("blendin").and_then(value::boolean) == Some(true)
+                || layer.get("blendout").and_then(value::boolean) == Some(true)
+            {
+                item.partial(format!(
+                    "puppet animation {name}: blending in and out is not supported"
+                ));
+            }
+            animations.push(MeshAnimation {
+                animation: id,
+                rate: field("rate").unwrap_or(1.0),
+                blend: field("blend").unwrap_or(1.0),
+                visible: layer
+                    .get("visible")
+                    .and_then(value::boolean)
+                    .unwrap_or(true),
+            });
+        }
+        let named = |i: usize| {
+            let n = &puppet.bone_names[i];
+            if n.is_empty() {
+                format!("{}", i + 1)
+            } else {
+                n.clone()
+            }
+        };
+        for (i, c) in puppet.constraints.iter().enumerate() {
+            if c.ik {
+                item.partial(format!(
+                    "puppet bone {}: inverse kinematics are not applied",
+                    named(i)
+                ));
+            }
+            if c.physics {
+                item.partial(format!(
+                    "puppet bone {}: physics (secondary motion) is not simulated",
+                    named(i)
+                ));
+            }
+        }
+        let json = puppet.mesh.to_json();
+        let stem = sanitize(
+            path.trim_end_matches(".mdl")
+                .rsplit('/')
+                .next()
+                .unwrap_or(path),
+        );
+        let source = format!("meshes/{stem}-{}.json", short_hash(&path));
+        self.files.insert(source.clone(), json.into_bytes());
+        Some(LayerMesh { source, animations })
     }
 
     fn effect(&mut self, effect: &Value, item: &mut Item) -> Option<Effect> {
@@ -873,6 +1526,8 @@ impl SceneBuilder {
                 }
                 let note = if u.name == "g_PointerPosition" {
                     "cursor interaction is inactive (the pointer stays centered)".to_owned()
+                } else if u.name == "g_ParallaxPosition" {
+                    "parallax input is inactive (the view stays centered)".to_owned()
                 } else if u.name.starts_with("g_AudioSpectrum") {
                     "audio response is silent".to_owned()
                 } else {

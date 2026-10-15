@@ -15,6 +15,9 @@ log.workspace = true
 bytemuck = { version = "1", features = ["derive"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 half = { version = "2", features = ["bytemuck"] }
+# Pure-Rust math, so particle simulation gives the same results natively and
+# in WebAssembly.
+libm = "0.2"
 
 [dev-dependencies]
 pollster.workspace = true

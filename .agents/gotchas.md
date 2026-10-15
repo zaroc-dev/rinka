@@ -123,7 +123,12 @@ something costs more than a few minutes.
 - **Textures are power-of-two padded.** The image is the top-left
   `image w×h`; crop it and pass `g_TextureNResolution` as (w, h, w, h).
 - **R8/RG88 keep GL channel meaning**: (r,0,0,1) and (r,g,0,1). Masks are
-  data: never sRGB-decode them. Scenes compose in gamma space.
+  data: never sRGB-decode them. Scenes compose in gamma space. Particle
+  sprites are the exception (see Particles).
+- **Zero engine matrices can poison a whole layer.** `depthparallax`
+  normalizes rows of `g_EffectTextureProjectionMatrixInverse`; at zero that is
+  NaN and the layer samples one texel (余霞成绮 and 长离 lost their whole
+  background, reported only as "approximated").
 - **Texture combos switch on only for provided textures.** A slot filled
   from the shader's `default` (`util/white`) must not enable its combo; doing
   so turned on `shake`'s MASK path.
@@ -132,6 +137,8 @@ something costs more than a few minutes.
   y up; the engine's turn clockwise with y down.
 - **Values come in several forms**: numbers, `"x y z"` strings, and
   `{value, user|script|animation}` wrappers. Use `value.rs`.
+- **`TEXB0003` can hold an MP4** (flag 0x20, no is-MP4 field). Detect it by
+  the `ftyp` box, not the container version, or it decodes as grey noise.
 
 ## Shader translation (naga GLSL frontend)
 
@@ -147,6 +154,80 @@ something costs more than a few minutes.
 - **HLSL-isms**: `max(0, v)` (swapped), implicit vector truncation (not fixed;
   `shimmer` fails), unguarded headers (include once).
 - **Shaders use `common.h` without including it.** It is always included.
+- **naga misplaces errors for scalar-to-swizzle assignments.** `c.rgb =
+  greyscale(c.rgb)` (legal HLSL) fails with "InvalidAccess … indexed" at an
+  unrelated line. Swizzle assignments go through `rinka_castN`; when an
+  error points at innocent code, bisect the shader instead of trusting the
+  location.
+
+- **Browsers enforce WGSL derivative uniformity; naga does not fully.**
+  `textureSample` in a branch on a varying passes naga's validator and runs
+  natively, but Chromium rejects the module, the pipeline is invalid and
+  every frame's command buffer fails: the preview stays black while the
+  wallpaper is fine (`depthparallax`, 4 scenes). Translated fragment shaders
+  start with `diagnostic(off, derivative_uniformity);`, which keeps GLSL's
+  implicit-derivative sampling. naga passing is not evidence the browser
+  accepts a shader; compile in Electron when in doubt.
+
+## Puppet warp (`.mdl`)
+
+- **The bind pose is not always the look.** Omen's mesh sits exactly on the
+  texture sheet (parts laid out side by side); only its animation frames put
+  the parts together. Reze's (`MDLV0023`) is already assembled and also stores
+  the unwarped positions after the indices. Play the animation layers; don't
+  stop at the bind pose.
+- **Headers vary by version.** Vertices are 52 or 80 bytes (format word
+  `0x01800009`/`0x0180000F`, found by looking ahead: `MDLV0021`+ put a small
+  nonzero word before it). Gaps between `MDLA` animations differ, and
+  `MDLA0006` stores more tracks than bones. Animation headers are found by
+  validating them; a zero byte before the id also parses (as a shifted id),
+  so prefer the start whose next word is zero and whose name follows.
+- **Layers hang from named points, not bones.** An object's `attachment`
+  (`head`, `back`) names an entry of the model's `MDAT` block (u16 bone,
+  name, matrix relative to the bone); the bones' own names can be empty.
+  Its origin is relative to that point. Placed as a plain child instead,
+  Shorekeeper's hood, hair and butterfly float beside her.
+- **Read the open parsers for layout only.** wallpaper-scene-renderer's
+  `WPMdlParser`/`WPPuppet` (GPL-2.0) explained the blocks and the blend
+  semantics; Rinka's code is its own.
+
+## Scene assets
+
+- **Layers share asset files.** Nine Shorekeeper layers use one mesh, and
+  shaders can share a vertex file. Don't consume a source the first time a
+  path is looked up (the preview once failed with "scene mesh … was not
+  added"); load each path once.
+- **A color blend needs what is below.** WE's `colorBlendMode` is its
+  `BLENDMODE` combo: `rgb = ApplyBlending(below, layer, layer alpha)`, alpha
+  stays the backdrop's. Modes 5 and 10 (min, max) ignore alpha, 31 is plain
+  additive blending. A layer drawn normally instead (Deep Sea's full-canvas
+  soft-light filter) covers the scene. The engine copies only the covered
+  rectangle to the backdrop, so a full-canvas blend layer costs one
+  full-frame copy per frame.
+- **A solid layer is its effects.** Audio bars and tints run on a white
+  solid; dropped effects leave a bare rectangle. Such layers import hidden
+  and say so.
+
+## Particles
+
+- **Particle textures convert by format.** `genericparticle` samples through
+  `ConvertTexture0Format`: R8 becomes (1,1,1,r), RG88 (r,r,r,g). Sampled raw,
+  the built-in fog, smoke, debris, lightning and light-shaft sprites draw as
+  opaque dark squares or tint whole scenes red (16 local scenes, all reported
+  as supported).
+- **Particle definitions are y up.** Rain spawns at `origin 0 768` and falls
+  with velocity `0 -3000`. Mirror every vector's y on import, swap range ends,
+  and keep rotation angles as they are (the sprite-axis formula mirrors).
+- **`sizerandom` is twice the sprite width.** Both open implementations pass
+  half of it to Wallpaper Engine's particle shader, which draws that as the
+  width; Moon Touch's glows only match the workshop preview at half.
+- **Docs and implementations disagree on oscillation frequency.** The docs
+  say oscillations per particle life; linux-wallpaperengine and
+  wallpaper-scene-renderer use radians per second. Rinka follows the docs;
+  verify on Windows against Wallpaper Engine.
+- **The open implementations are GPL-2.0 (wallpaper-scene-renderer) and
+  GPL-3.0 (linux-wallpaperengine).** Read them for defaults, do not copy
+  code.
 
 ## Editor UI
 
@@ -157,6 +238,10 @@ something costs more than a few minutes.
   1 px transparent border showed a dark hairline; remove the border.
 - **`#app` needs `height: 100%`.** Otherwise `height: 100%` children collapse
   (the stage frame was 2 px tall).
+- **Unbreakable text widens a grid.** Report notes quote asset paths
+  (`effects/workshop/…/effect.json`); without `overflow-wrap: anywhere` one
+  note set the import sheet's min-content width and gave it a horizontal
+  scrollbar.
 - **Preact 11 `useRef` needs an initial value**; ARIA roles are type-checked
   per element.
 - **Tray menu item ids change on every rebuild.** Electron rebuilds the
