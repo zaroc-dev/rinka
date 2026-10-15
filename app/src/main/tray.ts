@@ -1,5 +1,6 @@
-// Tray icon: open the editor, pause wallpaper animation, quit. On Linux it
-// is a StatusNotifierItem, shown by bars that host one.
+// Tray icon: open the editor, pause wallpaper animation, quit the editor or
+// everything. On Linux it is a StatusNotifierItem, shown by bars that host
+// one.
 
 import { Menu, nativeImage, Tray } from "electron";
 
@@ -7,6 +8,8 @@ export interface TrayActions {
   open(): void;
   setPaused(paused: boolean): void;
   quit(): void;
+  /** Stops the wallpaper host too. */
+  quitEntirely(): void;
 }
 
 export interface TrayState {
@@ -47,6 +50,7 @@ export class AppTray {
         },
         { type: "separator" },
         { label: "Quit editor (wallpapers keep running)", click: () => this.actions.quit() },
+        { label: "Quit entirely (stops wallpapers)", click: () => this.actions.quitEntirely() },
       ]),
     );
   }

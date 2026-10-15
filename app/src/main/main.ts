@@ -441,6 +441,12 @@ function updateTray(): void {
           quitting = true;
           app.quit();
         },
+        quitEntirely: () => {
+          quitting = true;
+          void (host?.request("shutdown") ?? Promise.resolve())
+            .catch((e: Error) => console.warn("shutdown:", e.message))
+            .finally(() => app.quit());
+        },
       },
       trayState(),
     );
