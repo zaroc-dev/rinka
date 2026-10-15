@@ -269,5 +269,8 @@ something costs more than a few minutes.
   spec lists them.
 - **electron-builder has no top-level `zip` key.** Name the zip through
   `win.artifactName`; `nsis.artifactName` overrides it for the installer.
+- **NSIS cannot open long paths.** Under `pnpm dlx`, electron-builder's
+  templates sit about 250 characters deep and `!include` fails on Windows;
+  install it with npm into a short directory instead.
 - **NSIS on Linux is not the Windows build.** Cross-building the installer
   fails on a codepage warning and then needs wine; build it on Windows.

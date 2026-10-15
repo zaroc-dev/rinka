@@ -101,7 +101,9 @@ jobs:
         run: |
           pnpm install --frozen-lockfile
           pnpm build
-          pnpm dlx "$ELECTRON_BUILDER" --linux --x64 --publish never
+          # Not pnpm dlx: its cache path is too long for NSIS on Windows.
+          npm install --prefix "$RUNNER_TEMP/eb" --no-save "$ELECTRON_BUILDER"
+          "$RUNNER_TEMP/eb/node_modules/.bin/electron-builder" --linux --x64 --publish never
       - name: Build the RPM
         run: |
           rpmbuild -bb packaging/rpm/rinka.spec \
@@ -140,7 +142,9 @@ jobs:
         run: |
           pnpm install --frozen-lockfile
           pnpm build
-          pnpm dlx "$ELECTRON_BUILDER" --win --x64 --publish never
+          # Not pnpm dlx: its cache path is too long for NSIS on Windows.
+          npm install --prefix "$RUNNER_TEMP/eb" --no-save "$ELECTRON_BUILDER"
+          "$RUNNER_TEMP/eb/node_modules/.bin/electron-builder" --win --x64 --publish never
       - uses: actions/upload-artifact@v7
         with:
           name: windows
