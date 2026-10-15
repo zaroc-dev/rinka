@@ -36,6 +36,17 @@ something costs more than a few minutes.
 
 ## Video
 
+- **FFmpeg input seeks use microseconds.** `Input::seek` has no stream index;
+  passing stream-time-base ticks silently seeks to the wrong place. Do not
+  discard seek messages between packets; paused seek must still display its
+  new generation, and a seek past the real end needs the last decodable frame.
+- **swscale does not see frame color metadata.** Its plane-pointer API needs
+  explicit source/destination matrix and range. Otherwise full-range JPEG
+  4:4:4 becomes limited-range 4:2:0 while the engine still treats it as full.
+- **Output color tags can trigger conversion in newer FFmpeg.** Generated
+  fixtures set frame tags with `setparams` before encoding, as well as output
+  tags, or supposed constant YUV codes change. Verify stored plane bytes.
+
 - **Chromium's GPU video path gets colors wrong.** `copyExternalImageToTexture`
   and `new VideoFrame(videoElement)` give RGB already converted with the BT.601
   matrix for BT.709 content (`rgb(34,117,112)` instead of `rgb(28,109,113)`).

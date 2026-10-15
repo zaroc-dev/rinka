@@ -119,6 +119,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: rustup update stable && rustup default stable
+      - name: Prepare Windows video dependencies
+        shell: pwsh
+        run: ./app/scripts/setup-windows-video.ps1 -GitHubActions
+      - name: Check host control and video scheduling
+        run: cargo test --locked -p rinka-host
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}

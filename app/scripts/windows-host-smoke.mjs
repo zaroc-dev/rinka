@@ -11,7 +11,7 @@ import { build } from "esbuild";
 
 assert.equal(process.platform, "win32", "this smoke check requires Windows Explorer and a GPU");
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-const binary = path.join(root, "target/debug/rinka-host.exe");
+const binary = process.env.RINKA_HOST_BIN ?? path.join(root, "target/debug/rinka-host.exe");
 const directory = path.join(root, "target/windows-smoke", String(process.pid));
 const pipe = `\\\\.\\pipe\\rinka-smoke-${process.pid}`;
 const bundled = await build({
