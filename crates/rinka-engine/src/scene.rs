@@ -45,6 +45,8 @@ pub enum SceneError {
     Missing(String),
     #[error("shader {0} is not declared")]
     Shader(String),
+    #[error("layer {0} attaches to {1}, which is not an attachment point of a mesh layer")]
+    Attach(String, String),
 }
 
 const LAYER_SHADER: &str = r#"
@@ -223,6 +225,8 @@ struct ParticleGpu {
 pub struct GpuScene {
     content: SceneContent,
     layers: Vec<LayerGpu>,
+    /// Per layer: the mesh layer and attachment point it follows.
+    attached: Vec<Option<(usize, usize)>>,
     pipelines: [wgpu::RenderPipeline; 3],
     mesh_pipelines: [wgpu::RenderPipeline; 3],
     particle_pipelines: [wgpu::RenderPipeline; 3],
@@ -755,9 +759,35 @@ impl GpuScene {
                 mesh,
             }));
         }
+        let mut attached = Vec::with_capacity(content.layers.len());
+        for (layer, gpu) in content.layers.iter().zip(&layers) {
+            let Some(a) = &layer.attach else {
+                attached.push(None);
+                continue;
+            };
+            let err =
+                || SceneError::Attach(layer.id.clone(), format!("{} › {}", a.layer, a.attachment));
+            if !matches!(gpu, LayerGpu::Quad(_)) {
+                return Err(err());
+            }
+            let target = content.layers.iter().position(|l| l.id == a.layer);
+            let point = target.and_then(|t| match &layers[t] {
+                LayerGpu::Quad(QuadGpu { mesh: Some(m), .. }) => m
+                    .mesh
+                    .attachments
+                    .iter()
+                    .position(|p| p.name == a.attachment),
+                _ => None,
+            });
+            match (target, point) {
+                (Some(t), Some(p)) => attached.push(Some((t, p))),
+                _ => return Err(err()),
+            }
+        }
         Ok(Self {
             content: content.clone(),
             layers,
+            attached,
             pipelines,
             mesh_pipelines,
             particle_pipelines,
@@ -842,7 +872,19 @@ impl GpuScene {
             )
         };
 
-        for (layer, gpu) in self.content.layers.iter().zip(&mut self.layers) {
+        // Attached layers follow their mesh layer's pose at this time.
+        let mut frames: Vec<Option<[f64; 6]>> = vec![None; self.layers.len()];
+        for (i, a) in self.attached.iter().enumerate() {
+            let Some((target, point)) = *a else { continue };
+            if let LayerGpu::Quad(QuadGpu { mesh: Some(m), .. }) = &mut self.layers[target]
+                && let Some(lm) = &self.content.layers[target].mesh
+            {
+                m.player.pose(&m.mesh, &lm.animations, time);
+                frames[i] = Some(m.player.attachment(&m.mesh, point));
+            }
+        }
+
+        for (i, (layer, gpu)) in self.content.layers.iter().zip(&mut self.layers).enumerate() {
             let gpu = match gpu {
                 LayerGpu::Quad(q) => q,
                 LayerGpu::Particles(p) => {
@@ -913,10 +955,27 @@ impl GpuScene {
                 layer.size[1] * layer.scale[1],
             );
             let (sin, cos) = layer.angle.sin_cos();
+            // An attached layer's placement is in its mesh layer's pixels,
+            // relative to the posed attachment point.
+            let parent = self.attached[i].zip(frames[i]).map(|((t, _), f)| {
+                let p = &self.content.layers[t];
+                let (sin, cos) = p.angle.sin_cos();
+                (p, f, sin, cos)
+            });
             let map = |u: f32, v: f32| {
                 let (x, y) = (u * w, v * h);
                 let (rx, ry) = (x * cos - y * sin, x * sin + y * cos);
-                let (ox, oy) = canvas_to_out(layer.origin[0] + rx, layer.origin[1] + ry);
+                let (mut cx, mut cy) = (layer.origin[0] + rx, layer.origin[1] + ry);
+                if let Some((p, f, sin, cos)) = parent {
+                    let (x, y) = (f64::from(cx), f64::from(cy));
+                    let (fx, fy) = (
+                        (f[0] * x + f[2] * y + f[4]) as f32 * p.scale[0],
+                        (f[1] * x + f[3] * y + f[5]) as f32 * p.scale[1],
+                    );
+                    cx = p.origin[0] + fx * cos - fy * sin;
+                    cy = p.origin[1] + fx * sin + fy * cos;
+                }
+                let (ox, oy) = canvas_to_out(cx, cy);
                 (to_clip_x(ox), to_clip_y(oy))
             };
             let (c0x, c0y) = map(0.0, 0.0);

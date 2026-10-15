@@ -390,7 +390,7 @@ async function loadScene(entry: LibraryEntry, project: Project, p: Preview, toke
   const base = `rinka://app/library/${entry.id}/`;
   const shaders = Object.values(project.content.shaders).flatMap((s) => [s.vertex, s.fragment]);
   const texts = await Promise.all(shaders.map(async (path) => [path, await (await fetch(base + path)).text()] as const));
-  const meshPaths = project.content.layers.flatMap((l) => (l.mesh ? [l.mesh.source] : []));
+  const meshPaths = [...new Set(project.content.layers.flatMap((l) => (l.mesh ? [l.mesh.source] : [])))];
   const meshes = await Promise.all(meshPaths.map(async (path) => [path, await (await fetch(base + path)).text()] as const));
   const textures = Object.keys(project.content.textures);
   const decoded = await Promise.all(

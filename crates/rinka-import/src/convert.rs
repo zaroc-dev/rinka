@@ -1,13 +1,13 @@
 //! Converts Wallpaper Engine workshop items into Rinka projects.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 use rinka_engine::mesh::MeshAnimation;
 use rinka_engine::project::{
-    Content, Effect, EffectPass, Fit, Layer, LayerBlend, LayerMesh, Project, Provenance,
-    SceneColorSpace, SceneContent, ShaderInfo, TextureInfo, UniformInfo,
+    Content, Effect, EffectPass, Fit, Layer, LayerAttach, LayerBlend, LayerMesh, Project,
+    Provenance, SceneColorSpace, SceneContent, ShaderInfo, TextureInfo, UniformInfo,
 };
 use serde_json::Value;
 
@@ -363,7 +363,20 @@ fn convert_scene(
         .iter()
         .filter_map(|o| Some((o.get("id")?.as_i64()?, o)))
         .collect();
+    // Plain parenting. Puppet attachments are only followed by image layers
+    // attached directly (see `SceneBuilder::attachment`).
     let world = |obj: &Value, item: &mut Item| -> Transform {
+        let attached = |o: &Value| {
+            o.get("attachment")
+                .and_then(Value::as_str)
+                .filter(|n| !n.is_empty())
+                .map(str::to_owned)
+        };
+        if let Some(name) = attached(obj) {
+            item.partial(format!(
+                "puppet attachment {name} is not followed; placed as a plain child"
+            ));
+        }
         let mut t = local_transform(obj, item);
         let mut parent = obj.get("parent").and_then(Value::as_i64);
         let mut guard = 0;
@@ -371,6 +384,11 @@ fn convert_scene(
             && let Some(p) = by_id.get(&pid)
             && guard < 32
         {
+            if let Some(name) = attached(p) {
+                item.partial(format!(
+                    "parent {pid} hangs from puppet attachment {name}, which this object does not follow"
+                ));
+            }
             let mut scratch = Item::new("", "", "");
             t = Transform::compose(local_transform(p, &mut scratch), t);
             parent = p.get("parent").and_then(Value::as_i64);
@@ -380,6 +398,8 @@ fn convert_scene(
     };
 
     let mut layers = Vec::new();
+    // Attached layer id → its plain world transform and report source.
+    let mut attach_fallback: HashMap<String, (Transform, String)> = HashMap::new();
     for obj in &objects {
         let id = obj.get("id").map_or_else(|| "?".into(), |v| v.to_string());
         let name = obj
@@ -391,10 +411,26 @@ fn convert_scene(
         let kind_of = |k: &str| obj.get(k).is_some_and(|v| !v.is_null());
         if kind_of("image") {
             let mut item = Item::new(&source, &name, "image layer");
-            let transform = world(obj, &mut item);
-            match builder.image_layer(obj, &id, &name, transform, height as f32, &mut item, report)
+            let attach = builder.attachment(obj, &by_id);
+            let transform = match &attach {
+                // Relative to the attachment point, in the puppet's pixels;
+                // the parents still decide visibility.
+                Some(_) => {
+                    let mut scratch = Item::new("", "", "");
+                    let world = world(obj, &mut scratch);
+                    attach_fallback.insert(id.clone(), (world, source.clone()));
+                    Transform {
+                        visible: world.visible,
+                        ..local_transform(obj, &mut item)
+                    }
+                }
+                None => world(obj, &mut item),
+            };
+            let canvas_height = if attach.is_some() { 0.0 } else { height as f32 };
+            match builder.image_layer(obj, &id, &name, transform, canvas_height, &mut item, report)
             {
-                Some(layer) => {
+                Some(mut layer) => {
+                    layer.attach = attach;
                     item.native = Some(format!("layer {}", layer.id));
                     layers.push(layer);
                 }
@@ -452,6 +488,30 @@ fn convert_scene(
         let mut item = Item::new(&source, &name, kind);
         item.unsupported(why);
         report.push(item);
+    }
+
+    // An attachment needs its puppet as a mesh layer; without one the layer
+    // is placed as a plain child.
+    let meshes: HashSet<String> = layers
+        .iter()
+        .filter(|l| l.mesh.is_some())
+        .map(|l| l.id.clone())
+        .collect();
+    for layer in &mut layers {
+        let Some(a) = layer.attach.take_if(|a| !meshes.contains(&a.layer)) else {
+            continue;
+        };
+        let (t, source) = &attach_fallback[&layer.id];
+        layer.origin = [t.origin[0], height as f32 - t.origin[1]];
+        layer.scale = t.scale;
+        layer.angle = -t.angle;
+        if let Some(item) = report.items.iter_mut().find(|i| &i.source == source) {
+            item.partial(format!(
+                "attachment {} does not follow its puppet, which is not converted",
+                a.attachment
+            ));
+        }
+        report.finish();
     }
 
     let content = SceneContent {
@@ -688,11 +748,11 @@ impl SceneBuilder {
                 }
             }
         }
-        for effect in get("effects")
+        let effects = get("effects")
             .and_then(Value::as_array)
             .cloned()
-            .unwrap_or_default()
-        {
+            .unwrap_or_default();
+        for effect in &effects {
             let mut effect_item = Item::new(
                 format!(
                     "object {id} › effect {}",
@@ -704,6 +764,12 @@ impl SceneBuilder {
             effect_item.unsupported("effects on solid layers are not supported yet");
             item.partial(format!("effect {} is missing", effect_item.name));
             report.push(effect_item);
+        }
+        // A solid layer's effects make what it shows (audio bars, tints);
+        // without them it would be a bare rectangle, so it starts hidden.
+        let hidden = !effects.is_empty() && t.visible;
+        if hidden {
+            item.partial("hidden, because it would show as a plain rectangle without its effects");
         }
         let blend = match pass
             .get("blending")
@@ -717,7 +783,7 @@ impl SceneBuilder {
         Layer {
             id: id.to_owned(),
             name: name.to_owned(),
-            visible: t.visible,
+            visible: t.visible && !hidden,
             texture: self.white(),
             origin: [t.origin[0], canvas_height - t.origin[1]],
             size: get("size")
@@ -732,6 +798,7 @@ impl SceneBuilder {
             effects: Vec::new(),
             particles: None,
             mesh: None,
+            attach: None,
         }
     }
 
@@ -874,6 +941,7 @@ impl SceneBuilder {
             effects: Vec::new(),
             particles: Some(converted.system),
             mesh: None,
+            attach: None,
         });
         for (i, child) in converted.children.iter().enumerate() {
             let local = Transform {
@@ -1084,7 +1152,44 @@ impl SceneBuilder {
             effects,
             particles: None,
             mesh,
+            attach: None,
         })
+    }
+
+    /// The puppet attachment point `obj` hangs from, if its parent's puppet
+    /// has it.
+    fn attachment(&self, obj: &Value, by_id: &HashMap<i64, &Value>) -> Option<LayerAttach> {
+        let name = obj
+            .get("attachment")
+            .and_then(Value::as_str)
+            .filter(|n| !n.is_empty())?;
+        let parent = obj.get("parent").and_then(Value::as_i64);
+        let points = parent
+            .and_then(|p| by_id.get(&p))
+            .and_then(|p| self.attachment_points(p))
+            .unwrap_or_default();
+        match parent {
+            Some(p) if points.iter().any(|n| n == name) => Some(LayerAttach {
+                layer: p.to_string(),
+                attachment: name.to_owned(),
+            }),
+            // `world` reports it.
+            _ => None,
+        }
+    }
+
+    fn attachment_points(&self, obj: &Value) -> Option<Vec<String>> {
+        let model = self.resolver.read_json(obj.get("image")?.as_str()?, None)?;
+        let bytes = self.resolver.read(model.get("puppet")?.as_str()?, None)?;
+        let puppet = puppet::parse(&bytes).ok()?;
+        Some(
+            puppet
+                .mesh
+                .attachments
+                .into_iter()
+                .map(|a| a.name)
+                .collect(),
+        )
     }
 
     /// Converts a puppet warp model into a mesh asset with the object's

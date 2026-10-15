@@ -13,6 +13,9 @@
 //! - `MDLSnnnn\0` · u32 end offset · u32 bones · per bone: name `\0` · u32 ·
 //!   u32 parent (`0xFFFFFFFF` for none) · u32 64 · 4×4 column-major local
 //!   bind matrix · JSON constraints `\0`.
+//! - `MDATnnnn\0` (optional, seen as `MDAT0001` before `MDLA`) · u32 end
+//!   offset · u16 attachments · per attachment: u16 bone · name `\0` ·
+//!   4×4 column-major matrix relative to the bone.
 //! - `MDLAnnnn\0` · u32 end offset · u32 animations · per animation: u32 id ·
 //!   u32 · name `\0` (an empty one is followed by the name) · mode `\0`
 //!   (`loop`, `mirror`, `single`) · f32 fps · u32 length · u32 · u32 tracks ·
@@ -25,7 +28,7 @@
 //! positions and translations negate y, matrices are conjugated by
 //! diag(1, −1, 1) and rotations about x and z change sign.
 
-use rinka_engine::mesh::{self, Animation, Bone, Mesh, PlayMode};
+use rinka_engine::mesh::{self, Animation, Attachment, Bone, Mesh, PlayMode};
 
 #[derive(Debug, thiserror::Error)]
 pub enum MdlError {
@@ -37,6 +40,8 @@ pub enum MdlError {
     Vertices(u32),
     #[error("puppet bone matrix of {0} bytes")]
     Matrix(u32),
+    #[error("puppet attachment {0} refers to a missing bone")]
+    Attachment(String),
     #[error("puppet bone {0} comes before its parent")]
     Parent(usize),
     #[error("puppet animation {0} could not be read")]
@@ -224,6 +229,29 @@ pub fn parse(data: &[u8]) -> Result<Puppet, MdlError> {
         }
     }
 
+    let mut attachments = Vec::new();
+    let mut a = Reader { data, pos: r.pos };
+    if !bones.is_empty() && a.seek_tag(b"MDAT").is_ok() {
+        let _end = a.u32()?;
+        let count = a.u16()?;
+        for _ in 0..count {
+            let bone = u32::from(a.u16()?);
+            let name = a.string()?;
+            if bone as usize >= bones.len() {
+                return Err(MdlError::Attachment(name));
+            }
+            let mut m = [0f32; 16];
+            for v in &mut m {
+                *v = a.f32()?;
+            }
+            attachments.push(Attachment {
+                name,
+                bone,
+                matrix: mirror_matrix(m),
+            });
+        }
+    }
+
     let mut animations = Vec::new();
     if !bones.is_empty() && r.seek_tag(b"MDLA").is_ok() {
         let _end = r.u32()?;
@@ -268,6 +296,7 @@ pub fn parse(data: &[u8]) -> Result<Puppet, MdlError> {
         weights: if skinned { weights } else { Vec::new() },
         bones,
         animations,
+        attachments,
     };
     Ok(Puppet {
         mesh,

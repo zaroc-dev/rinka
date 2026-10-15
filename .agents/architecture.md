@@ -54,6 +54,11 @@ A project is a directory with `project.json` and its assets:
   matrices, animations with 9-float frames per bone) and `animations` are
   the layers playing on it (`animation` id, `rate`, `blend`, `visible`).
   Imported from Wallpaper Engine puppet warp (`.mdl`, `rinka-import/src/puppet.rs`).
+  Meshes may name `attachments` (a bone and a matrix relative to it).
+- A layer with `attach: {layer, attachment}` follows that mesh layer's
+  attachment point: its origin, scale and angle are relative to the posed
+  point, in the mesh layer's pixels, and the mesh layer's transform applies
+  on top. A dangling reference fails the scene build.
 - A layer with `particles` is a particle system (`particles.rs`): max count,
   start time, seed, emitters (disk or box), initializers, operators,
   renderer (sprite or trail), optional sprite sheet. Its texture is the
@@ -95,7 +100,8 @@ holds `{version: 1, assignments: {output: projectId}}`; the library is
   positions are divided by the layer size into that space and drawn indexed,
   sampling the layer's effect output with the mesh uvs. Skinned meshes are
   posed on the CPU each frame (`MeshPlayer`, `f64` + `libm`, a pure function
-  of scene time).
+  of scene time). Attached layers read their point from the same pose and
+  compose their quad's affine map through it.
 - Particle layers: each frame the layer's `Simulation` advances in fixed
   1/60 s steps to the scene time (seeded, `libm` math, so native and
   preview agree; going back replays, jumps over 30 s restart 30 s before),

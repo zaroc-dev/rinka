@@ -52,7 +52,7 @@ unexplained mismatch on validated scenes.
 | Video textures on layers | 2 | MP4 inside `.tex`; was decoded as noise before 2026-10-14 |
 | Composition layers (effects on everything below) | 4 | |
 | Color blend modes on layers | 5 | Drawn normally; a full-canvas soft-light solid layer blacks out Dreams of the Deep Sea |
-| Effects on solid layers | 2 | Audio-bar layers show as bare white rectangles |
+| Effects on solid layers | 2 | Such layers import hidden (audio bars, a tint) |
 | Puppet IK, bone physics | 1 | Reze: left hand IK, head and hair secondary motion |
 
 Solid (`flat`) layers and particles v1 landed on 2026-10-14; the census

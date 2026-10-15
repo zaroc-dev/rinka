@@ -182,9 +182,24 @@ something costs more than a few minutes.
   `MDLA0006` stores more tracks than bones. Animation headers are found by
   validating them; a zero byte before the id also parses (as a shifted id),
   so prefer the start whose next word is zero and whose name follows.
+- **Layers hang from named points, not bones.** An object's `attachment`
+  (`head`, `back`) names an entry of the model's `MDAT` block (u16 bone,
+  name, matrix relative to the bone); the bones' own names can be empty.
+  Its origin is relative to that point. Placed as a plain child instead,
+  Shorekeeper's hood, hair and butterfly float beside her.
 - **Read the open parsers for layout only.** wallpaper-scene-renderer's
   `WPMdlParser`/`WPPuppet` (GPL-2.0) explained the blocks and the blend
   semantics; Rinka's code is its own.
+
+## Scene assets
+
+- **Layers share asset files.** Nine Shorekeeper layers use one mesh, and
+  shaders can share a vertex file. Don't consume a source the first time a
+  path is looked up (the preview once failed with "scene mesh … was not
+  added"); load each path once.
+- **A solid layer is its effects.** Audio bars and tints run on a white
+  solid; dropped effects leave a bare rectangle. Such layers import hidden
+  and say so.
 
 ## Particles
 
@@ -216,6 +231,10 @@ something costs more than a few minutes.
   1 px transparent border showed a dark hairline; remove the border.
 - **`#app` needs `height: 100%`.** Otherwise `height: 100%` children collapse
   (the stage frame was 2 px tall).
+- **Unbreakable text widens a grid.** Report notes quote asset paths
+  (`effects/workshop/…/effect.json`); without `overflow-wrap: anywhere` one
+  note set the import sheet's min-content width and gave it a horizontal
+  scrollbar.
 - **Preact 11 `useRef` needs an initial value**; ARIA roles are type-checked
   per element.
 - **Tray menu item ids change on every rebuild.** Electron rebuilds the

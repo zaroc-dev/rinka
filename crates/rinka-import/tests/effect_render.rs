@@ -112,6 +112,7 @@ fn translated_effect_runs_on_a_layer() {
             }],
             particles: None,
             mesh: None,
+            attach: None,
         }],
         textures: BTreeMap::from([
             (

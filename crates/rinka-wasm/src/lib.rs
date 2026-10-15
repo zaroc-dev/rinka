@@ -273,6 +273,10 @@ impl Preview {
             }
             for shader in content.shaders.values() {
                 for path in [&shader.vertex, &shader.fragment] {
+                    // Shaders and layers may share a file; it is added once.
+                    if assets.shaders.contains_key(path) {
+                        continue;
+                    }
                     let key = format!("{asset_prefix}{path}");
                     let source = self.shader_sources.remove(&key).ok_or_else(|| {
                         JsError::new(&format!("scene shader {key} was not added"))
@@ -285,6 +289,9 @@ impl Preview {
                 .iter()
                 .filter_map(|l| Some(&l.mesh.as_ref()?.source))
             {
+                if assets.meshes.contains_key(path) {
+                    continue;
+                }
                 let key = format!("{asset_prefix}{path}");
                 let source = self
                     .mesh_sources

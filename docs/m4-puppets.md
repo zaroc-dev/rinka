@@ -15,7 +15,8 @@ until it went away, then checked against Wallpaper Engine's own shaders.
 | `depthparallax` engine matrices read zero | 3 visible | Whole background one flat color (余霞成绮, 长离; Dreams of the Deep Sea under its filter layer) | Fixed |
 | Puppet warp meshes ignored | 2 visible | The texture sheet drawn flat: Reze bald with her hair beside her, Omen in pieces | Fixed |
 | Color blend modes drawn normally | 1 visible | Dreams of the Deep Sea black with a white square (soft-light and overlay solid layers) | Open (reported partial) |
-| Solid layers whose effect is dropped | 2 | Bare white rectangles (audio bars) | Open (reported) |
+| Solid layers whose effect is dropped | 2 | Bare white rectangles (audio bars) | Hidden and reported; effects still open |
+| Puppet attachments ignored | 1 | Shorekeeper's hood, hair and butterfly beside her, a second hood | Fixed |
 | Video textures | 1 | 【战双帕弥什】 grey | Open (reported) |
 
 Checked and not glitches: the grey wedge in 女孩独享的宁静傍晚 and Demon
@@ -70,9 +71,22 @@ shaders of the library compile in Electron's WebGPU (4 failed before, all
   gun and blade of its preview; Reze has her hair, umbrella and flowers in
   place. Both animate subtly (breathing, head tilt) with no drift at t = 30 s.
   The editor preview (WASM, smoke capture) shows the same.
+- **Attachments.** Objects with `attachment` hang from a named point of
+  their parent's model (`MDAT0001`: u16 bone, name, matrix). The engine
+  places them through the posed point each frame (`layer.attach`), so
+  Shorekeeper's 18 attached layers (hood, hair, shirt, flowers, butterfly)
+  sit on her and move with her head. Only that scene uses them.
 - **Not done.** Inverse kinematics (Reze's left hand) and bone physics (her
   head and hair) are reported, not simulated. Blend-in/out, non-additive
   layers and scripted rates use static values and are reported.
+
+## Found when checking on the desktop
+
+- The editor preview failed on scenes whose layers share a mesh ("scene
+  mesh … was not added": Shorekeeper, Deep Sea); assets were consumed on
+  first lookup. Each path is now loaded once.
+- The import sheet scrolled sideways: a report note quoting a long effect
+  path did not wrap.
 
 ## Tests
 
@@ -81,6 +95,8 @@ shaders of the library compile in Electron's WebGPU (4 failed before, all
   pixels); mesh JSON round trip.
 - `mesh.rs` unit tests: bind pose, blending, seeking, matrix inverse,
   validation. `puppet.rs`: y mirroring of bone matrices.
+- `scene_mesh.rs`: a layer attached to a bone sits on the point at the bind
+  pose and follows the bone's animation (exact pixels).
 
 ## Unverified
 

@@ -13,6 +13,9 @@
 //! `world · bind⁻¹`. Poses are a pure function of the scene time, computed in
 //! `f64` with `libm`, so native and WebAssembly builds agree and seeking is
 //! exact.
+//!
+//! Attachment points are named frames on bones; layers attached to one
+//! follow its bone's pose (see [`crate::project::LayerAttach`]).
 
 use serde::{Deserialize, Serialize};
 
@@ -45,6 +48,18 @@ pub struct Mesh {
     pub bones: Vec<Bone>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub animations: Vec<Animation>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<Attachment>,
+}
+
+/// A named frame that moves with a bone.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Attachment {
+    pub name: String,
+    pub bone: u32,
+    /// Relative to the bone: a column-major 4×4 matrix.
+    pub matrix: [f32; 16],
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -160,6 +175,13 @@ impl Mesh {
             if bone.parent.is_some_and(|p| p as usize >= i) {
                 return Err(Invalid("a bone comes before its parent"));
             }
+        }
+        if self
+            .attachments
+            .iter()
+            .any(|a| a.bone as usize >= self.bones.len())
+        {
+            return Err(Invalid("an attachment refers to a missing bone"));
         }
         for anim in &self.animations {
             if anim.tracks.len() != self.bones.len() {
@@ -418,8 +440,10 @@ struct Active<'a> {
 
 /// Plays a mesh's animation layers.
 pub struct MeshPlayer {
+    bind: Vec<M4>,
     /// Inverse bind-pose world matrices.
     inverse_bind: Vec<M4>,
+    /// The pose of the last [`MeshPlayer::pose`].
     world: Vec<M4>,
     skin: Vec<M4>,
 }
@@ -441,8 +465,9 @@ impl MeshPlayer {
             .collect();
         Self {
             inverse_bind,
-            world: vec![IDENTITY; mesh.bones.len()],
+            world: world.clone(),
             skin: vec![IDENTITY; mesh.bones.len()],
+            bind: world,
         }
     }
 
@@ -485,21 +510,14 @@ impl MeshPlayer {
         active
     }
 
-    /// Writes the mesh's vertex positions at scene time `time` into `out` as
-    /// `[x, y]` pairs.
-    pub fn positions(
-        &mut self,
-        mesh: &Mesh,
-        layers: &[MeshAnimation],
-        time: f64,
-        out: &mut Vec<f32>,
-    ) {
-        out.clear();
+    /// Poses the skeleton at scene time `time`; false if no animation plays
+    /// (the bind pose).
+    pub fn pose(&mut self, mesh: &Mesh, layers: &[MeshAnimation], time: f64) -> bool {
         let mut rest = 1.0;
         let active = Self::resolve(mesh, layers, &mut rest);
-        if mesh.joints.is_empty() || active.is_empty() {
-            out.extend_from_slice(&mesh.positions);
-            return;
+        if active.is_empty() {
+            self.world.clone_from(&self.bind);
+            return false;
         }
         for (i, bone) in mesh.bones.iter().enumerate() {
             let bind_t = [12, 13, 14].map(|k| f64::from(bone.matrix[k]));
@@ -535,6 +553,31 @@ impl MeshPlayer {
                 None => local,
             };
             self.skin[i] = mul(&self.world[i], &self.inverse_bind[i]);
+        }
+        true
+    }
+
+    /// Attachment `index` in the last pose, as the 2D affine map
+    /// `[a, b, c, d, tx, ty]`: `(x, y) → (a·x + c·y + tx, b·x + d·y + ty)`.
+    pub fn attachment(&self, mesh: &Mesh, index: usize) -> [f64; 6] {
+        let a = &mesh.attachments[index];
+        let m = mul(&self.world[a.bone as usize], &a.matrix.map(f64::from));
+        [m[0], m[1], m[4], m[5], m[12], m[13]]
+    }
+
+    /// Writes the mesh's vertex positions at scene time `time` into `out` as
+    /// `[x, y]` pairs.
+    pub fn positions(
+        &mut self,
+        mesh: &Mesh,
+        layers: &[MeshAnimation],
+        time: f64,
+        out: &mut Vec<f32>,
+    ) {
+        out.clear();
+        if !self.pose(mesh, layers, time) || mesh.joints.is_empty() {
+            out.extend_from_slice(&mesh.positions);
+            return;
         }
         for v in 0..mesh.vertex_count() {
             let (x, y) = (
@@ -608,6 +651,7 @@ mod tests {
                     [still(5.0, 0.0), still(15.0, 0.0)].concat(),
                 ],
             }],
+            attachments: Vec::new(),
         }
     }
 

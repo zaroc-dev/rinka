@@ -237,6 +237,22 @@ pub struct Layer {
     /// Draws the texture through a mesh instead of as a quad.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mesh: Option<LayerMesh>,
+    /// Follows an attachment point of another layer's mesh. The layer's
+    /// origin, scale and angle are then relative to that point, in the mesh
+    /// layer's pixels (y down), and the mesh layer's transform applies on
+    /// top.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attach: Option<LayerAttach>,
+}
+
+/// Where an attached layer hangs (see [`Layer::attach`]).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LayerAttach {
+    /// Id of a layer with a mesh.
+    pub layer: String,
+    /// Name of one of its mesh's attachment points.
+    pub attachment: String,
 }
 
 /// A layer's mesh: the asset and the animations playing on its skeleton.
