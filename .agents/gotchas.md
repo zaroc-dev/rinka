@@ -123,6 +123,12 @@ something costs more than a few minutes.
 
 ## Wallpaper Engine formats
 
+- **An import check currently performs full conversion.** Omitting `--out`
+  skips final writing, after texture decoding and PNG encoding already ran.
+  On the Windows debug build these took 98–99% of sampled check time;
+  shader translation and disk writes were small (`docs/windows-host.md`).
+  Report-only optimizations must preserve asset/shader validation while
+  avoiding output encoding; raising concurrency alone repeats the CPU cost.
 - **Volume textures** (flag `0x40`, color LUTs) have an extra depth field in
   the header *and* in every mip header.
 - **Textures are power-of-two padded.** The image is the top-left

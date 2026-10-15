@@ -101,6 +101,44 @@ Linux directories and returned no workshop roots on this machine.
   initialization succeeded, and the editor connected to the native host on
   the NVIDIA GeForce RTX 4070 (Vulkan).
 
+## Import speed diagnosis (2026-10-15)
+
+Measured sequentially on the same Windows machine using the current
+unoptimized `target/debug/rinka-host.exe`. Ordinary CLI checks took 15.83 s
+(Crimson Sun), 18.41 s (Reze in Rain), and 32.47 s (Nier 2B). Steam discovery
+took 79 ms. A web wallpaper rejected without scene conversion took 100 ms.
+
+A temporary diagnostic executable used a copy of the converter with timers
+around package reading/parsing, texture decoding, PNG asset generation,
+shader translation/annotations, puppet parsing, and output writing. Its
+results closely matched the ordinary CLI:
+
+| Check | Total | PNG asset generation | Texture decoding | Shader translation |
+| --- | --- | --- | --- | --- |
+| Crimson Sun | 15.71 s | 10.34 s | 5.25 s | 0.06 s |
+| Reze in Rain | 18.29 s | 14.64 s | 3.29 s | 0.15 s |
+| Nier 2B | 32.25 s | 24.48 s | 7.01 s | 0.25 s |
+
+The PNG timer covers `SceneBuilder::store`, including compression and its
+small amount of asset bookkeeping. Package reading/parsing took 2–16 ms.
+Importing Crimson Sun into an isolated scratch project took 15.66 s, with
+10.7 ms in output writing. These are local samples with warm filesystem
+caches, not a Windows/Linux or debug/release comparison.
+
+Checks currently perform full conversion, including PNG generation in
+memory; only the final write is skipped. Actual import repeats conversion.
+Reports survive rescans in the editor process, but are not persisted across
+editor restarts, and conversion/shader caches are scoped to one item run.
+The editor checks three items at a time. Particle sprites can also be decoded
+once while testing for sprite sheets and again for their ordinary texture.
+
+The next useful performance work is an optimized native importer build,
+avoiding output PNG generation during checks while retaining asset and
+shader validation, then reusable conversion results with correct source and
+importer-version invalidation. No optimization was applied in this diagnosis.
+The diagnostic executable, raw timing records, and scratch imported project
+remain local under ignored `target/`; no personal artwork was published.
+
 ## Still unverified or incomplete
 
 - Exact desktop pixels and native/preview screen equality. GPU readback and
