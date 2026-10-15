@@ -75,14 +75,40 @@ content on every monitor, shuts down its own host and keeps fixtures/logs
 under ignored `target/windows-smoke/`. `--hold` adds a 30-second inspection
 interval. It does not connect to the user's normal host pipe.
 
+## Workshop discovery and editor check (2026-10-15)
+
+The editor now reads Steam's Windows registry locations and standard install
+directories, then follows `libraryfolders.vdf`. Canonical paths are
+deduplicated without case sensitivity. The previous discovery only checked
+Linux directories and returned no workshop roots on this machine.
+
+- Discovery and an Electron renderer scan found all 39 downloaded workshop
+  items exactly once, plus Wallpaper Engine's built-in assets.
+- The Import screen has a native folder picker for a Steam library, Wallpaper
+  Engine installation, or `431960` workshop folder. It persists the selection
+  in application configuration and can return to automatic discovery.
+- `node --test app/scripts/workshop.test.mjs`: five checks passed, covering
+  registry/VDF discovery, manual locations, invalid and disconnected folders,
+  configuration persistence, and rescans while conversion checks are pending.
+- An isolated Electron smoke run exercised cancel, invalid selection, valid
+  selection through the button, and return to automatic discovery. Native
+  dialog responses were scripted; the operating-system picker itself was not
+  driven. The renderer found 39 items after selection and reset. Its layout
+  capture was inspected locally and is not published.
+- TypeScript checking and editor bundling passed. The shared WASM engine was
+  rebuilt in the development profile using the local Windows tools; Windows
+  application control blocked a release-profile build helper. WebGPU preview
+  initialization succeeded, and the editor connected to the native host on
+  the NVIDIA GeForce RTX 4070 (Vulkan).
+
 ## Still unverified or incomplete
 
 - Exact desktop pixels and native/preview screen equality. GPU readback and
   successful surface initialization are not screen capture evidence. The
   available window-capture tool did not expose Explorer's wallpaper children.
-- Full editor build/smoke: generated WASM bindings are absent, and this
-  Windows toolchain lacks the WASM target and wasm-bindgen CLI. Linux/Nix
-  checks were not run on this Windows machine.
+- Full editor interaction and exact screen rendering. Editor build and the
+  targeted smoke checks above pass; Linux/Nix checks were not run on this
+  Windows machine.
 - Actual animated-scene pacing, Explorer restart recovery, display hotplug,
   DPI changes, focus/input behavior and the classic WorkerW layout.
 - DX12 presentation. The measured host selected Vulkan.

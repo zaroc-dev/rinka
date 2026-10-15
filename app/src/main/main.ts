@@ -11,7 +11,7 @@ import { connectOrSpawn, defaultSocketPath, findHostBinary, type HostConnection 
 import { ConfigStore, IMPORT_EXTENSIONS, Library, type StoredEntry } from "./library";
 import { Thumbnails } from "./thumbnails";
 import { AppTray } from "./tray";
-import { Workshop } from "./workshop";
+import { Workshop, workshopFolder } from "./workshop";
 
 const SMOKE = process.env.RINKA_SMOKE === "1";
 
@@ -257,7 +257,26 @@ function registerIpc(): void {
     refreshThumbnails();
   });
   ipcMain.handle("library:reveal", () => shell.openPath(library.root));
-  ipcMain.handle("workshop:scan", () => workshop.scan());
+  ipcMain.handle("workshop:scan", () => workshop.scan(config.config.workshopFolder));
+  ipcMain.handle("workshop:locate", async () => {
+    if (!window) return null;
+    const result = await dialog.showOpenDialog(window, {
+      title: "Locate Wallpaper Engine or its workshop folder",
+      defaultPath: config.config.workshopFolder,
+      properties: ["openDirectory"],
+    });
+    const folder = result.filePaths[0];
+    if (result.canceled || !folder) return null;
+    workshopFolder(folder);
+    config.config.workshopFolder = folder;
+    config.save();
+    return workshop.scan(folder);
+  });
+  ipcMain.handle("workshop:reset-folder", () => {
+    delete config.config.workshopFolder;
+    config.save();
+    return workshop.scan();
+  });
   ipcMain.handle("workshop:import", async (_e, id: string, allowPartial: boolean) => {
     const item = workshop.get(id);
     if (!item) throw new Error("This workshop item is no longer available.");

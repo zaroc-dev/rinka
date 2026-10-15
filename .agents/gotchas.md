@@ -82,6 +82,11 @@ something costs more than a few minutes.
 
 ## Windows host
 
+- **Steam locations differ by platform.** Windows workshop discovery needs
+  Steam's `SteamPath`/`InstallPath` registry values and standard Program Files
+  locations, followed by `libraryfolders.vdf`; Linux-only defaults find
+  nothing. Canonicalize paths and deduplicate without case sensitivity on
+  Windows so registry, fallback and VDF aliases do not repeat items.
 - **Win32 functions can need extra feature gates.** `ConnectNamedPipe` needs
   `windows-sys/Win32_System_IO` even for synchronous calls with null OVERLAPPED.
 - **The desktop layout can change when requested.** Check Progman's

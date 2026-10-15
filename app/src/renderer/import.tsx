@@ -30,13 +30,29 @@ export function ImportView({ onImported, onOpen, onToast }: { onImported(entry: 
   const [items, setItems] = useState<Map<string, WorkshopItem>>(new Map());
   const [filter, setFilter] = useState<Filter>("all");
   const [selected, setSelected] = useState<string | null>(null);
+  const [locating, setLocating] = useState(false);
+
+  function showScan(result: WorkshopScan) {
+    setScan(result);
+    setItems(new Map(result.items.map((item) => [item.id, item])));
+    setSelected(null);
+  }
+
+  async function locate(automatic = false) {
+    setLocating(true);
+    try {
+      const result = await (automatic ? api.resetWorkshopFolder() : api.locateWorkshop());
+      if (result) showScan(result);
+    } catch (e) {
+      onToast(errorMessage(e));
+    } finally {
+      setLocating(false);
+    }
+  }
 
   useEffect(() => {
-    api.onWorkshopItem((item) => setItems((prev) => new Map(prev).set(item.id, item)));
-    void api.scanWorkshop().then((s) => {
-      setScan(s);
-      setItems(new Map(s.items.map((i) => [i.id, i])));
-    });
+    api.onWorkshopItem((item) => setItems((prev) => prev.has(item.id) ? new Map(prev).set(item.id, item) : prev));
+    void api.scanWorkshop().then(showScan).catch((e) => onToast(errorMessage(e)));
   }, []);
 
   const list = useMemo(
@@ -65,27 +81,40 @@ export function ImportView({ onImported, onOpen, onToast }: { onImported(entry: 
             {checking > 0 && ` · checking ${checking}`}
           </span>
         </div>
-        <div class="chips" role="tablist" aria-label="Filter">
-          {(
-            [
-              ["all", "All"],
-              ["supported", "Ready"],
-              ["partial", "With changes"],
-              ["unsupported", "Missing features"],
-              ["imported", "In library"],
-            ] as [Filter, string][]
-          ).map(([f, label]) => (
-            <button type="button" role="tab" class="chip" aria-selected={filter === f} onClick={() => setFilter(f)}>
-              {label}
-              <span class="chip-count">{count(f)}</span>
-            </button>
-          ))}
+        <div class="library-tools">
+          <button type="button" class="button" disabled={locating} onClick={() => void locate()}>
+            Locate folder…
+          </button>
+          <div class="chips" role="tablist" aria-label="Filter">
+            {(
+              [
+                ["all", "All"],
+                ["supported", "Ready"],
+                ["partial", "With changes"],
+                ["unsupported", "Missing features"],
+                ["imported", "In library"],
+              ] as [Filter, string][]
+            ).map(([f, label]) => (
+              <button type="button" role="tab" class="chip" aria-selected={filter === f} onClick={() => setFilter(f)}>
+                {label}
+                <span class="chip-count">{count(f)}</span>
+              </button>
+            ))}
+          </div>
         </div>
       </div>
-      {scan && scan.workshopDirs.length === 0 ? (
+      {scan?.folder && (
+        <div class="workshop-location">
+          <span class="muted small">Selected folder: {scan.folder}</span>
+          <button type="button" class="button" disabled={locating} onClick={() => void locate(true)}>
+            Use automatic discovery
+          </button>
+        </div>
+      )}
+      {scan && items.size === 0 ? (
         <div class="empty">
           <p class="empty-title">No Wallpaper Engine workshop items found</p>
-          <p>Install Wallpaper Engine through Steam and subscribe to wallpapers in the workshop; they appear here once downloaded.</p>
+          <p>Install Wallpaper Engine through Steam and subscribe to wallpapers, or use “Locate folder…” to choose your Steam library, Wallpaper Engine installation, or 431960 workshop folder.</p>
         </div>
       ) : (
         <>

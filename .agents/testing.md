@@ -71,6 +71,9 @@ before calling a release done.
 
 ## Editor
 
+- Workshop discovery and folder selection: `node --test app/scripts/workshop.test.mjs`.
+  Uses generated Steam library fixtures; no local workshop content is needed.
+
 - Smoke mode: `RINKA_SMOKE=1 RINKA_SMOKE_OUT=out.png RINKA_SMOKE_DELAY=ms`
   starts the app, optionally runs `RINKA_SMOKE_EVAL` (JavaScript in the
   renderer), captures and exits. `RINKA_USER_DATA` points at a throwaway

@@ -150,6 +150,8 @@ export interface WorkshopItem {
 }
 
 export interface WorkshopScan {
+  /** Manually selected source folder, or null for automatic discovery. */
+  folder: string | null;
   /** Where items were looked for; empty when no Steam library was found. */
   workshopDirs: string[];
   assetsDir: string | null;
@@ -185,6 +187,9 @@ export interface RinkaApi {
   revealLibrary(): Promise<void>;
   /** Lists Wallpaper Engine workshop items and starts checking them. */
   scanWorkshop(): Promise<WorkshopScan>;
+  /** Opens a folder picker and remembers the selected workshop location. */
+  locateWorkshop(): Promise<WorkshopScan | null>;
+  resetWorkshopFolder(): Promise<WorkshopScan>;
   /** Converts an item into a library project. */
   importWorkshopItem(id: string, allowPartial: boolean): Promise<{ report: ImportReport; entry: LibraryEntry | null }>;
   onWorkshopItem(listener: (item: WorkshopItem) => void): void;
