@@ -171,7 +171,7 @@ The release workflow prepares the SDK before building the Windows package.
 
 Checks on Windows 11, RTX 4070, Vulkan, three monitors:
 
-- All 20 host tests passed with the generated fixtures enabled. Tests cover
+- All 21 host tests passed with the generated fixtures enabled. Tests cover
   VFR scheduling/looping, paused and repeated seeks, seeking beyond the real
   end, decoder metadata, and exact GPU pixel readback for BT.709 limited,
   BT.601 full, 4:4:4 chroma (including full-range MJPEG), and untagged SD/HD.

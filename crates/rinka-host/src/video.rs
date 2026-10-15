@@ -567,6 +567,15 @@ impl Player {
                 self.seeking = false;
                 return (Some(frame), None);
             }
+            if self.seeking
+                && self
+                    .origin
+                    .is_some_and(|(_, requested)| frame.pts < requested)
+            {
+                // The decoder fell back to the real last frame. Do not race
+                // through repeated loops trying to reach an out-of-file clock.
+                self.origin = Some((now, frame.pts));
+            }
             // The clock starts with the first frame shown.
             let origin = *self.origin.get_or_insert((now, frame.pts));
             let position = origin.1 + now.duration_since(origin.0).as_secs_f64();
@@ -732,6 +741,16 @@ mod tests {
         assert_eq!(p.poll(now).0.unwrap().file_pts, 0.8);
     }
 
+    #[test]
+    fn playing_seek_past_the_end_rebases_to_the_last_frame() {
+        let (mut p, tx, _commands) = player();
+        let now = Instant::now();
+        p.seek(1e100, now);
+        tx.send(frame(1.16, 1.16, 1)).unwrap();
+        assert_eq!(p.poll(now).0.unwrap().file_pts, 1.16);
+        assert_eq!(p.position_in_video(now), Some(1.16));
+    }
+
     fn fixture(name: &str) -> PathBuf {
         PathBuf::from(std::env::var_os("RINKA_VIDEO_FIXTURES")
             .expect("generate fixtures with node app/scripts/video-fixtures.mjs and set RINKA_VIDEO_FIXTURES"))
@@ -824,6 +843,10 @@ mod tests {
             );
             assert!(player.is_paused());
         }
+        player.seek(20.0, Instant::now());
+        let frame = next_frame(&mut player);
+        assert!(frame.file_pts > 1.1 && frame.file_pts < 1.2);
+        player.resume(Instant::now());
         player.seek(20.0, Instant::now());
         let frame = next_frame(&mut player);
         assert!(frame.file_pts > 1.1 && frame.file_pts < 1.2);
