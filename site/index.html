@@ -80,8 +80,10 @@ code { font: 0.88em var(--mono); }
 }
 .name img { width: 0.9em; height: 0.9em; }
 .tagline { margin: 10px 0 0; color: var(--soft); font-size: 18px; }
-.quick { display: grid; gap: 8px; justify-items: start; font-size: 15px; }
-.quick .cmd { display: flex; align-items: center; gap: 10px; }
+/* On narrow screens the command scrolls instead of pushing Copy off screen. */
+.quick { display: grid; grid-template-columns: minmax(0, 1fr); max-width: 100%; gap: 8px; justify-items: start; font-size: 15px; }
+.quick .cmd { display: flex; align-items: center; gap: 10px; max-width: 100%; }
+.quick .cmd pre { min-width: 0; }
 .quick nav { display: flex; gap: 18px; color: var(--muted); }
 .wallpaper-credit { position: absolute; top: 16px; right: 20px; margin: 0; font: 12px var(--mono); color: rgb(230 232 242 / 0.45); }
 
@@ -217,9 +219,10 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 28px; justify-content: s
         <p class="tagline">A wallpaper engine for Niri and Hyprland.</p>
       </div>
       <div class="quick">
-        <div class="cmd"><pre><code>nix run github:zaroc-dev/rinka</code></pre><button class="copy" type="button">Copy</button></div>
+        <div class="cmd"><pre><code>nix run github:zaroc-dev/rinka/stable</code></pre><button class="copy" type="button">Copy</button></div>
         <nav aria-label="Page">
           <a href="#install">Install</a>
+          <a href="https://github.com/zaroc-dev/rinka/releases/latest">Download</a>
           <a href="#status">Status</a>
           <a href="https://github.com/zaroc-dev/rinka">Source</a>
         </nav>
@@ -281,7 +284,7 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 28px; justify-content: s
         <tbody>
           <tr><td>Niri</td><td><span class="state ok">works</span></td><td class="soft">Colors, images, video and scenes, used daily.</td></tr>
           <tr><td>Hyprland</td><td><span class="state partial">untested</span></td><td class="soft">Uses the same layer-shell protocol; expected to work.</td></tr>
-          <tr><td>Windows</td><td><span class="state partial">experimental</span></td><td class="soft">Colors, images and scenes behind the desktop icons. No video yet; build from source.</td></tr>
+          <tr><td>Windows</td><td><span class="state partial">experimental</span></td><td class="soft">Colors, images and scenes behind the desktop icons. No video yet; unsigned installer.</td></tr>
           <tr><td>Scene import</td><td><span class="state partial">partial</span></td><td class="soft">Of 33 scenes measured, <span class="num">1</span> converts fully and <span class="num">1</span> partly; <span class="num">264</span> of <span class="num">277</span> effect shaders translate.</td></tr>
           <tr><td>Particles</td><td><span class="state no">next</span></td><td class="soft">Used by <span class="num">28</span> of the <span class="num">33</span> scenes, so most imports wait on this.</td></tr>
           <tr><td>Text, sound, scripts</td><td><span class="state no">planned</span></td><td class="soft">SceneScript, audio-reactive values and text layers.</td></tr>
@@ -295,16 +298,16 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 28px; justify-content: s
   <section id="install">
     <div class="wrap col">
       <h2>Install</h2>
-      <p class="soft">Rinka is a Nix flake. It needs a Wayland compositor with wlr-layer-shell and a GPU with Vulkan.</p>
+      <p class="soft">On Linux, Rinka needs a Wayland compositor with wlr-layer-shell and a GPU with Vulkan. Packages for Fedora and Windows are on the <a href="https://github.com/zaroc-dev/rinka/releases/latest">releases page</a>.</p>
 
       <h3>Try it</h3>
-      <p class="soft">Opens the editor, which starts the wallpaper host.</p>
-      <div class="code"><pre><code>nix run github:zaroc-dev/rinka</code></pre><button class="copy" type="button">Copy</button></div>
+      <p class="soft">Opens the editor, which starts the wallpaper host. <code>stable</code> is the latest release; leave it off for the development branch.</p>
+      <div class="code"><pre><code>nix run github:zaroc-dev/rinka/stable</code></pre><button class="copy" type="button">Copy</button></div>
 
       <h3>Keep it, with Home Manager</h3>
-      <p class="soft">The host starts at login and brings back the wallpapers you picked.</p>
+      <p class="soft">The host starts at login and brings back the wallpapers you picked. <code>nix flake update</code> moves you to the next release.</p>
       <div class="code"><pre><code><span class="c"># flake.nix</span>
-inputs.rinka.url = "github:zaroc-dev/rinka";
+inputs.rinka.url = "github:zaroc-dev/rinka/stable";
 
 <span class="c"># home.nix</span>
 imports = [ inputs.rinka.homeManagerModules.default ];
@@ -314,8 +317,13 @@ services.rinka.enable = true;</code></pre><button class="copy" type="button">Cop
       <p class="soft">Add the package and start the host from your compositor, for example in Niri:</p>
       <div class="code"><pre><code>spawn-at-startup "rinka-host" "serve" "--restore"</code></pre><button class="copy" type="button">Copy</button></div>
 
+      <h3>Fedora</h3>
+      <p class="soft">Download the <code>.rpm</code> from the latest release. Fedora's own FFmpeg cannot decode H.264 or HEVC; for those videos install <code>ffmpeg-libs</code> from RPM Fusion.</p>
+      <div class="code"><pre><code>sudo dnf install ./rinka-*.rpm
+systemctl --user enable --now rinka-host</code></pre><button class="copy" type="button">Copy</button></div>
+
       <h3>Windows</h3>
-      <p class="soft">There is no installer yet. Building from source and the current limits are described in the <a href="https://github.com/zaroc-dev/rinka/blob/main/docs/windows-host.md">Windows notes</a>.</p>
+      <p class="soft">Experimental: colors, images and scenes play, video does not yet. Download <code>Rinka-Setup</code> from the latest release, or the zip to run it without installing. The builds are not signed, so SmartScreen warns before the first start. Current limits are in the <a href="https://github.com/zaroc-dev/rinka/blob/main/docs/windows-host.md">Windows notes</a>.</p>
     </div>
   </section>
 </main>
