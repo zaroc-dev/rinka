@@ -113,6 +113,7 @@ fn render_with(
         alpha: 1.0,
         brightness: 1.0,
         blend: LayerBlend::Translucent,
+        color_blend: None,
         effects: Vec::new(),
         particles: None,
         mesh: Some(LayerMesh {
@@ -230,6 +231,7 @@ fn attached_layer_follows_its_bone() {
         alpha: 1.0,
         brightness: 1.0,
         blend: LayerBlend::Translucent,
+        color_blend: None,
         effects: Vec::new(),
         particles: None,
         mesh: None,

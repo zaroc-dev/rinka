@@ -44,8 +44,8 @@ A project is a directory with `project.json` and its assets:
   tile are 1:1 device pixels).
 - `scene`: canvas `width`/`height`, `fit`, `clear_color`, `color_space: gamma`,
   `layers` (bottom to top: texture, origin (center, y down), size, scale,
-  angle (clockwise, radians), color, alpha, brightness, blend, effects,
-  optional `particles`), `textures` (path → clamp/nearest), `shaders` (id →
+  angle (clockwise, radians), color, alpha, brightness, blend, optional
+  `color_blend`, effects, optional `particles`), `textures` (path → clamp/nearest), `shaders` (id →
   WGSL vertex/fragment paths, reflected uniform layout, texture slots).
 - A layer with `mesh` draws its texture through a triangle mesh
   (`mesh.rs`): `{source, animations}`, where `source` is a `rinka.mesh`
@@ -102,6 +102,14 @@ holds `{version: 1, assignments: {output: projectId}}`; the library is
   posed on the CPU each frame (`MeshPlayer`, `f64` + `libm`, a pure function
   of scene time). Attached layers read their point from the same pose and
   compose their quad's affine map through it.
+- Color-blended layers (`color_blend`: multiply, soft_light, … in
+  `project::ColorBlend`): the scene then composes into an offscreen `work`
+  texture. Before each such layer the target pixels it covers are copied to
+  a `backdrop` texture; `fs_blend` reads the backdrop pixel, applies the
+  formula with the layer's alpha as opacity and replaces the target there.
+  The result is drawn onto the frame at the end. Scenes without color
+  blends draw straight to the frame as before. Blending works on the values
+  as composed (encoded in gamma scenes, as Wallpaper Engine does).
 - Particle layers: each frame the layer's `Simulation` advances in fixed
   1/60 s steps to the scene time (seeded, `libm` math, so native and
   preview agree; going back replays, jumps over 30 s restart 30 s before),

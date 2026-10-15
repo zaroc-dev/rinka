@@ -100,6 +100,7 @@ fn translated_effect_runs_on_a_layer() {
             alpha: 1.0,
             brightness: 1.0,
             blend: LayerBlend::Translucent,
+            color_blend: None,
             effects: vec![Effect {
                 id: "2".into(),
                 name: "invert".into(),

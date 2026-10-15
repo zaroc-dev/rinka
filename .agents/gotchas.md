@@ -197,6 +197,13 @@ something costs more than a few minutes.
   shaders can share a vertex file. Don't consume a source the first time a
   path is looked up (the preview once failed with "scene mesh … was not
   added"); load each path once.
+- **A color blend needs what is below.** WE's `colorBlendMode` is its
+  `BLENDMODE` combo: `rgb = ApplyBlending(below, layer, layer alpha)`, alpha
+  stays the backdrop's. Modes 5 and 10 (min, max) ignore alpha, 31 is plain
+  additive blending. A layer drawn normally instead (Deep Sea's full-canvas
+  soft-light filter) covers the scene. The engine copies only the covered
+  rectangle to the backdrop, so a full-canvas blend layer costs one
+  full-frame copy per frame.
 - **A solid layer is its effects.** Audio bars and tints run on a white
   solid; dropped effects leave a bare rectangle. Such layers import hidden
   and say so.

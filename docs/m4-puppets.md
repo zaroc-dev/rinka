@@ -14,7 +14,7 @@ until it went away, then checked against Wallpaper Engine's own shaders.
 | R8/RG88 particle sprites sampled raw | 16 | Opaque black or pink squares (both Shorekeeper scenes, Nier), red streaks (BloodMoon), red or pink casts (Raiden, Frieren, Demon Slayer, Oriental Thunderstorm), red instead of blue fire (Omen) | Fixed |
 | `depthparallax` engine matrices read zero | 3 visible | Whole background one flat color (余霞成绮, 长离; Dreams of the Deep Sea under its filter layer) | Fixed |
 | Puppet warp meshes ignored | 2 visible | The texture sheet drawn flat: Reze bald with her hair beside her, Omen in pieces | Fixed |
-| Color blend modes drawn normally | 1 visible | Dreams of the Deep Sea black with a white square (soft-light and overlay solid layers) | Open (reported partial) |
+| Color blend modes drawn normally | 1 visible | Dreams of the Deep Sea black with a white square (soft-light and overlay solid layers) | Fixed (2026-10-15) |
 | Solid layers whose effect is dropped | 2 | Bare white rectangles (audio bars) | Hidden and reported; effects still open |
 | Puppet attachments ignored | 1 | Shorekeeper's hood, hair and butterfly beside her, a second hood | Fixed |
 | Video textures | 1 | 【战双帕弥什】 grey | Open (reported) |
@@ -80,6 +80,32 @@ shaders of the library compile in Electron's WebGPU (4 failed before, all
   head and hair) are reported, not simulated. Blend-in/out, non-additive
   layers and scripted rates use static values and are reported.
 
+## Color blend modes
+
+`colorBlendMode` is Wallpaper Engine's `BLENDMODE` combo (formulas in its
+`shaders/common_blending.h`): the layer's color is blended with what is
+below by the mode's formula and mixed in by the layer's alpha; the
+backdrop's alpha stays. Rinka stores named modes (`layer.color_blend`) and
+blends in its own layer shader against a copy of the covered pixels (see
+`.agents/architecture.md`). Mode 31 (below + layer · alpha) imports as
+additive blending.
+
+- **Library use.** Ten layers in six scenes: Deep Sea (soft light 12,
+  overlay 11 ×3, hard light 13, color burn 3), 3366882745 (tint 30),
+  3343375809 and 3665191582 (31), 3492635480 (color dodge 8, a text layer).
+  Only Deep Sea changes visibly: its other blend layers are unsupported for
+  other reasons (custom layer shaders, a video texture), and 3665191582's
+  additive layer is the bottom one over black.
+- **Result.** Deep Sea, black before, now shows the glowing deep with the
+  girl's silhouette, matching its preview (minus text); the editor preview
+  matches. The other 35 scenes render pixel-identical to before.
+- **Sources.** The mode numbers and formulas come from WE's own shader
+  headers in the install. waywallen's scene plugin
+  (open-wallpaper-engine, GPL-2.0) confirmed which side is the backdrop and
+  that mode 31 is additive; read only.
+- **Cost.** One copy of the covered rectangle per color-blended layer per
+  frame, plus a full-frame draw at the end. Not measured on the host yet.
+
 ## Found when checking on the desktop
 
 - The editor preview failed on scenes whose layers share a mesh ("scene
@@ -95,6 +121,8 @@ shaders of the library compile in Electron's WebGPU (4 failed before, all
   pixels); mesh JSON round trip.
 - `mesh.rs` unit tests: bind pose, blending, seeking, matrix inverse,
   validation. `puppet.rs`: y mirroring of bone matrices.
+- `scene_blend.rs`: multiply against the layer below with a normal layer
+  above it, and screen at half alpha (exact pixels ±1).
 - `scene_mesh.rs`: a layer attached to a bone sits on the point at the bind
   pose and follows the bone's animation (exact pixels).
 

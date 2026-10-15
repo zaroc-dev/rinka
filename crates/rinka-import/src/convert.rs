@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 
 use rinka_engine::mesh::MeshAnimation;
 use rinka_engine::project::{
-    Content, Effect, EffectPass, Fit, Layer, LayerAttach, LayerBlend, LayerMesh, Project,
-    Provenance, SceneColorSpace, SceneContent, ShaderInfo, TextureInfo, UniformInfo,
+    ColorBlend, Content, Effect, EffectPass, Fit, Layer, LayerAttach, LayerBlend, LayerMesh,
+    Project, Provenance, SceneColorSpace, SceneContent, ShaderInfo, TextureInfo, UniformInfo,
 };
 use serde_json::Value;
 
@@ -247,6 +247,61 @@ struct SceneBuilder {
     /// Source texture path → project path.
     texture_paths: HashMap<String, String>,
     translations: HashMap<String, Result<String, String>>,
+}
+
+/// An object's `colorBlendMode` (Wallpaper Engine's `BLENDMODE` numbers):
+/// a color blend, or for mode 31 (below + layer · alpha) additive blending.
+fn color_blend(obj: &Value, item: &mut Item) -> (Option<ColorBlend>, bool) {
+    let Some(v) = obj.get("colorBlendMode") else {
+        return (None, false);
+    };
+    let (_, extras) = value::unwrap(v);
+    if extras.script || extras.animation {
+        item.partial("colorBlendMode is animated or scripted; its static value is used");
+    }
+    use ColorBlend as C;
+    let mode = value::float(v).unwrap_or(0.0) as i64;
+    let blend = match mode {
+        0 => return (None, false),
+        31 => return (None, true),
+        1 => C::Darken,
+        2 => C::Multiply,
+        3 => C::ColorBurn,
+        4 | 20 => C::Subtract,
+        5 => C::Min,
+        6 => C::Lighten,
+        7 => C::Screen,
+        8 => C::ColorDodge,
+        9 => C::Add,
+        10 => C::Max,
+        11 => C::Overlay,
+        12 => C::SoftLight,
+        13 => C::HardLight,
+        14 => C::VividLight,
+        15 => C::LinearLight,
+        16 => C::PinLight,
+        17 => C::HardMix,
+        18 => C::Difference,
+        19 => C::Exclusion,
+        21 => C::Reflect,
+        22 => C::Glow,
+        23 => C::Phoenix,
+        24 => C::Average,
+        25 => C::Negation,
+        26 => C::Hue,
+        27 => C::Saturation,
+        28 => C::Color,
+        29 => C::Luminosity,
+        30 => C::Tint,
+        32 => C::Brighten,
+        other => {
+            item.partial(format!(
+                "color blend mode {other} is unknown; the layer blends normally"
+            ));
+            return (None, false);
+        }
+    };
+    (Some(blend), false)
 }
 
 fn local_transform(obj: &Value, item: &mut Item) -> Transform {
@@ -780,6 +835,12 @@ impl SceneBuilder {
             "normal" | "disabled" => LayerBlend::Opaque,
             _ => LayerBlend::Translucent,
         };
+        let (color_blend, additive) = color_blend(obj, item);
+        let blend = if additive {
+            LayerBlend::Additive
+        } else {
+            blend
+        };
         Layer {
             id: id.to_owned(),
             name: name.to_owned(),
@@ -795,6 +856,7 @@ impl SceneBuilder {
             alpha: get("alpha").and_then(value::float).unwrap_or(1.0),
             brightness: get("brightness").and_then(value::float).unwrap_or(1.0),
             blend,
+            color_blend,
             effects: Vec::new(),
             particles: None,
             mesh: None,
@@ -816,6 +878,9 @@ impl SceneBuilder {
         let Some(path) = obj.get("particle").and_then(Value::as_str) else {
             return Vec::new();
         };
+        if value::float(obj.get("colorBlendMode").unwrap_or(&Value::Null)).unwrap_or(0.0) != 0.0 {
+            item.partial("color blend modes on particles are not supported; they blend normally");
+        }
         let ov = obj.get("instanceoverride");
         let overrides = ov.map(Overrides::read).unwrap_or_default();
         let field = |k: &str| ov.and_then(|o| o.get(k));
@@ -938,6 +1003,7 @@ impl SceneBuilder {
             alpha: 1.0,
             brightness: overbright * style.brightness,
             blend,
+            color_blend: None,
             effects: Vec::new(),
             particles: Some(converted.system),
             mesh: None,
@@ -1032,6 +1098,12 @@ impl SceneBuilder {
                 LayerBlend::Translucent
             }
         };
+        let (color_blend, additive) = color_blend(obj, item);
+        let blend = if additive {
+            LayerBlend::Additive
+        } else {
+            blend
+        };
         let Some(texture_name) = pass
             .get("textures")
             .and_then(|t| t.get(0))
@@ -1076,9 +1148,6 @@ impl SceneBuilder {
                     ));
                 }
             }
-        }
-        if get("colorBlendMode").and_then(value::float).unwrap_or(0.0) != 0.0 {
-            item.partial("color blend modes are not supported; the layer blends normally");
         }
         match get("alignment").and_then(Value::as_str).unwrap_or("center") {
             "center" => {}
@@ -1149,6 +1218,7 @@ impl SceneBuilder {
             alpha,
             brightness,
             blend,
+            color_blend,
             effects,
             particles: None,
             mesh,

@@ -51,7 +51,7 @@ unexplained mismatch on validated scenes.
 | Camera parallax, bloom | 6 each | Scene-level settings |
 | Video textures on layers | 2 | MP4 inside `.tex`; was decoded as noise before 2026-10-14 |
 | Composition layers (effects on everything below) | 4 | |
-| Color blend modes on layers | 5 | Drawn normally; a full-canvas soft-light solid layer blacks out Dreams of the Deep Sea |
+| Color blend modes on layers | 1 left | Done on image and solid layers (2026-10-15); left: one text layer (with text) |
 | Effects on solid layers | 2 | Such layers import hidden (audio bars, a tint) |
 | Puppet IK, bone physics | 1 | Reze: left hand IK, head and hair secondary motion |
 
