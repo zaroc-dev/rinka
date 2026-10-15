@@ -56,7 +56,8 @@ if (
 const appDir = app.getAppPath();
 const repoRoot = path.resolve(appDir, "..");
 const rendererDir = path.join(appDir, "dist", "renderer");
-const hostBinary = () => findHostBinary(repoRoot);
+// Packaged builds (electron-builder) ship the host in the resources directory.
+const hostBinary = () => findHostBinary(repoRoot, app.isPackaged ? process.resourcesPath : undefined);
 
 /** The window and tray icon: ICO on Windows (several sizes), PNG elsewhere. */
 const appIcon = () => path.join(appDir, "dist", "resources", process.platform === "win32" ? "icon.ico" : "icon.png");

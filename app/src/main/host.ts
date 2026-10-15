@@ -27,10 +27,14 @@ export function defaultSocketPath(): string | null {
   return runtime ? path.join(runtime, "rinka", "host.sock") : null;
 }
 
-/** Finds the host binary: $RINKA_HOST_BIN, else the newest workspace build. */
-export function findHostBinary(repoRoot: string): string | null {
+/**
+ * Finds the host binary: $RINKA_HOST_BIN, else the one shipped in a packaged
+ * app's resources, else the newest workspace build.
+ */
+export function findHostBinary(repoRoot: string, resourcesDir?: string): string | null {
   if (process.env.RINKA_HOST_BIN) return process.env.RINKA_HOST_BIN;
   const exe = process.platform === "win32" ? "rinka-host.exe" : "rinka-host";
+  if (resourcesDir && existsSync(path.join(resourcesDir, exe))) return path.join(resourcesDir, exe);
   const candidates = ["release", "debug"]
     .map((profile) => path.join(repoRoot, "target", profile, exe))
     .filter((p) => existsSync(p))

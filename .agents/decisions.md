@@ -26,6 +26,7 @@ reason here in the same change.
 | Host also is the CLI for import and thumbnails | Native decoders (FFmpeg, full-size images, pkg/tex) in one place; the editor spawns it with JSON jobs. |
 | Background layer-shell surface per output, one composed surface per monitor | Compositor stacking is not a layering mechanism; the engine composes. |
 | Output assignments live in `~/.config/rinka/config.json`, not in projects | Projects stay portable; `serve --restore` reads the same file. |
+| Releases from version tags: Fedora RPM, Windows NSIS installer + zip, Nix `stable` branch | The RPM is built on the Fedora release whose FFmpeg matches nixpkgs, so its soname requirements are real; `stable` is fast-forwarded by CI so flake users follow releases with `nix flake update`. |
 
 ## Rendering
 
@@ -65,7 +66,7 @@ reason here in the same change.
 - Particle simulation design (determinism, seeking).
 - Project stacks: schema and per-instance overrides.
 - Package format beyond a project directory; asset content hashes.
-- Windows host: minimum supported version, packaging, video and visibility
+- Windows host: minimum supported version, video and visibility
   signals. Initial presentation uses Explorer child windows (classic WorkerW
   or raised Progman desktop), with named-pipe control; acceptance remains
   incomplete (`docs/windows-host.md`).

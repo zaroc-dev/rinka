@@ -1,0 +1,179 @@
+# Builds the Windows installer and the Fedora RPM, checks the Nix package, and
+# on a version tag (0.1.0 or v0.1.0) publishes a GitHub release and moves the
+# `stable` branch to the tagged commit for Nix users. Pull requests that touch
+# packaging run the same builds without publishing.
+name: Release
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+*", "[0-9]+.[0-9]+.[0-9]+*"]
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
+      - "app/electron-builder.yml"
+      - "packaging/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  PNPM_VERSION: "12.9.0"
+  NODE_VERSION: "24"
+  ELECTRON_BUILDER: "electron-builder@26.15.3"
+  # Electron comes from electron-builder's own download, not the npm package.
+  ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: v
+        name: Check that the tag matches the project version
+        run: |
+          cargo=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
+          app=$(jq -r .version app/package.json)
+          if [ "$cargo" != "$app" ]; then
+            echo "::error::Cargo.toml has $cargo but app/package.json has $app"
+            exit 1
+          fi
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "${GITHUB_REF_NAME#v}" != "$cargo" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match version $cargo; bump Cargo.toml and app/package.json first"
+            exit 1
+          fi
+          echo "version=$cargo" >> "$GITHUB_OUTPUT"
+          case "$cargo" in *-*) echo "prerelease=true" ;; *) echo "prerelease=false" ;; esac >> "$GITHUB_OUTPUT"
+
+  # The engine as WebAssembly, built once through the flake so wasm-bindgen
+  # matches the dev shell. Both platforms ship the same bindings.
+  wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: cachix/install-nix-action@v31
+      - run: nix build .#rinka-wasm && cp -rL result wasm
+      - uses: actions/upload-artifact@v7
+        with:
+          name: wasm
+          path: wasm
+
+  # What `github:zaroc-dev/rinka/stable` users will build.
+  nix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: cachix/install-nix-action@v31
+      - run: nix build .#rinka -L
+
+  # Built on the Fedora release whose FFmpeg matches nixpkgs, so the RPM
+  # requires the sonames the host was linked against.
+  linux:
+    needs: [version, wasm]
+    runs-on: ubuntu-latest
+    container: fedora:45
+    steps:
+      - name: Install build dependencies
+        run: >
+          dnf -y install git tar xz cargo rust clang-devel ffmpeg-free-devel
+          rpm-build systemd-rpm-macros
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: pnpm/action-setup@v6
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/download-artifact@v8
+        with:
+          name: wasm
+          path: app/src/renderer/wasm
+      - run: cargo build --locked --release -p rinka-host
+      - name: Package the app
+        working-directory: app
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+          pnpm dlx "$ELECTRON_BUILDER" --linux --x64 --publish never
+      - name: Build the RPM
+        run: |
+          rpmbuild -bb packaging/rpm/rinka.spec \
+            --define "rinka_version ${{ needs.version.outputs.version }}" \
+            --define "rinka_root $PWD" \
+            --define "_rpmdir $PWD/rpm"
+          rpm -qp --requires rpm/x86_64/*.rpm
+      # Proves every dependency resolves from Fedora's own repositories.
+      - name: Install the RPM
+        run: dnf -y install rpm/x86_64/*.rpm && rinka-host --help
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux
+          path: rpm/x86_64/*.rpm
+
+  windows:
+    needs: [version, wasm]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup update stable && rustup default stable
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: pnpm/action-setup@v6
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/download-artifact@v8
+        with:
+          name: wasm
+          path: app/src/renderer/wasm
+      - run: cargo build --locked --release -p rinka-host
+      - name: Package the app
+        working-directory: app
+        shell: bash
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+          pnpm dlx "$ELECTRON_BUILDER" --win --x64 --publish never
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows
+          path: |
+            app/out/*.exe
+            app/out/*.zip
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: [version, nix, linux, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: "{linux,windows}"
+          path: dist
+          merge-multiple: true
+      - name: Publish the release
+        run: |
+          flags=(--verify-tag --generate-notes --title "Rinka ${{ needs.version.outputs.version }}")
+          [ "${{ needs.version.outputs.prerelease }}" = true ] && flags+=(--prerelease)
+          gh release create "$GITHUB_REF_NAME" "${flags[@]}" dist/*
+      # Fast-forward only: an older tag pushed later never moves stable back.
+      - name: Move the stable branch
+        if: needs.version.outputs.prerelease == 'false'
+        run: |
+          if gh api "repos/$GH_REPO/git/ref/heads/stable" >/dev/null 2>&1; then
+            gh api -X PATCH "repos/$GH_REPO/git/refs/heads/stable" -f sha="$GITHUB_SHA" -F force=false
+          else
+            gh api -X POST "repos/$GH_REPO/git/refs" -f ref=refs/heads/stable -f sha="$GITHUB_SHA"
+          fi

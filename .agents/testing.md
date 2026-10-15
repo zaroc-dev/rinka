@@ -56,6 +56,18 @@ protocol/playback/restore behavior and shuts its host down. `--hold` leaves a
 content; successful surface setup is not proof of exact screen pixels. See
 `docs/windows-host.md` for the measured checks and remaining acceptance work.
 
+## Release packages
+
+`.github/workflows/release.yml` runs on version tags and on pull requests that
+touch packaging. To check the RPM locally, run its `linux` job steps in a
+`fedora:45` container (with `app/src/renderer/wasm` from
+`nix build .#rinka-wasm`), then install the RPM in a fresh container and
+smoke-start it under `xvfb-run` with `RINKA_SMOKE=1 RINKA_SMOKE_CONNECT=1`.
+WebGPU fails there (software adapter) and the host exits without a
+compositor; what this shows is that the UI loads from the asar and the
+bundled host is found and spawned. Check the installed app on a real desktop
+before calling a release done.
+
 ## Editor
 
 - Smoke mode: `RINKA_SMOKE=1 RINKA_SMOKE_OUT=out.png RINKA_SMOKE_DELAY=ms`

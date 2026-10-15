@@ -252,3 +252,22 @@ something costs more than a few minutes.
   use a short runtime directory.
 - **`cargo fmt` rewraps code.** Patch scripts that match exact text break
   after formatting; re-read the file or match with a regex.
+
+## Packaging
+
+- **A packaged app has no repository.** The host is found through
+  `process.resourcesPath` (electron-builder `extraResources`), not `target/`.
+- **The RPM's FFmpeg requirement comes from the build machine.** The host
+  links `libavcodec.so.N` dynamically; build it on the Fedora release the RPM
+  targets (the one whose FFmpeg major matches nixpkgs, Fedora 45 for FFmpeg 9).
+- **Electron's bundled libraries must stay private in the RPM.** Without
+  `__provides_exclude_from` the package would provide `libvulkan.so.1` and
+  `libEGL.so` to the whole system, and the `libffmpeg.so` requirement can
+  never be met. `_build_id_links none` avoids clashes with other Electron apps.
+- **wgpu and the Wayland host dlopen their libraries**, so RPM's automatic
+  requirements miss `vulkan-loader`, `libwayland-client` and friends; the
+  spec lists them.
+- **electron-builder has no top-level `zip` key.** Name the zip through
+  `win.artifactName`; `nsis.artifactName` overrides it for the installer.
+- **NSIS on Linux is not the Windows build.** Cross-building the installer
+  fails on a codepage warning and then needs wine; build it on Windows.
