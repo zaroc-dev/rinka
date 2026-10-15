@@ -6,6 +6,7 @@ pub mod convert;
 mod particles;
 pub mod pkg;
 pub mod preprocess;
+pub mod puppet;
 pub mod report;
 pub mod shader;
 pub mod tex;

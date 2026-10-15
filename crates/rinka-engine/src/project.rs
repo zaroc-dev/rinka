@@ -234,6 +234,20 @@ pub struct Layer {
     /// `origin`, `scale` and `angle` place the system. `size` is unused.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub particles: Option<crate::particles::Particles>,
+    /// Draws the texture through a mesh instead of as a quad.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesh: Option<LayerMesh>,
+}
+
+/// A layer's mesh: the asset and the animations playing on its skeleton.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LayerMesh {
+    /// Mesh asset ([`crate::mesh::Mesh`], project path).
+    pub source: String,
+    /// Bottom to top; a higher layer takes its blend first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub animations: Vec<crate::mesh::MeshAnimation>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

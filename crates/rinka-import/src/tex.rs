@@ -277,6 +277,21 @@ pub fn decode(data: &[u8]) -> Result<Texture, TexError> {
     })
 }
 
+/// Rewrites a decoded one- or two-channel texture the way Wallpaper Engine's
+/// particle shaders read it (`ConvertTexture0Format` in `genericparticle`):
+/// R8 is a white sprite with alpha r, RG88 a grey sprite r with alpha g.
+/// Other formats are left as they are.
+pub fn as_particle_sprite(format: TexFormat, image: &mut RgbaImage) {
+    for p in image.pixels_mut() {
+        let [r, g, ..] = p.0;
+        p.0 = match format {
+            TexFormat::R8 => [255, 255, 255, r],
+            TexFormat::Rg88 => [r, r, r, g],
+            _ => return,
+        };
+    }
+}
+
 /// An ISO media file starts with a box whose type is `ftyp`.
 fn is_mp4_file(bytes: &[u8]) -> bool {
     bytes.get(4..8) == Some(b"ftyp")

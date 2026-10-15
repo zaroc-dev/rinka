@@ -10,7 +10,7 @@ Status as of 2026-10-14. Measurements behind each line are in `docs/`.
 | M1 | Images: fits, background color, library, thumbnails | Done on Niri |
 | M2 | FFmpeg video: PTS timing, loop, pause/seek, preview decode path | Done on Niri |
 | M3 | Wallpaper Engine scene import + project layer editor + project stacks | Import partly done; editor and stacks not started |
-| M4 | Compatibility from measured failures: particles, multi-pass, animation, scripts, audio | Particles v1 and solid layers done (`docs/m4-particles.md`) |
+| M4 | Compatibility from measured failures: particles, multi-pass, animation, scripts, audio | Particles v1, solid layers and puppet warp done (`docs/m4-particles.md`, `docs/m4-puppets.md`) |
 | M5 | Broader editing, packaging, more desktops | Not started |
 
 Gates from the original spec still apply: M0 needs Niri **and** Hyprland;
@@ -32,6 +32,10 @@ unexplained mismatch on validated scenes.
     perspective particles drawn flat), 29 blocked; both videos convert fully.
     (Before 2026-10-14 this read "3 fully supported", counting the videos.)
   - particle objects: 100 supported, 111 partial, 28 unsupported.
+  - Rendering survey of the 36 scenes now in the library (39 items) and the
+    fixes it led to: `docs/m4-puppets.md`. All 16 puppet layers convert;
+    one- and two-channel particle sprites (16 scenes) now draw as Wallpaper
+    Engine draws them.
 - Crimson Sun native: ~28 fps, ~2 ms CPU per frame, 507 MiB GPU.
 
 ## Blockers by scenes affected
@@ -47,6 +51,9 @@ unexplained mismatch on validated scenes.
 | Camera parallax, bloom | 6 each | Scene-level settings |
 | Video textures on layers | 2 | MP4 inside `.tex`; was decoded as noise before 2026-10-14 |
 | Composition layers (effects on everything below) | 4 | |
+| Color blend modes on layers | 5 | Drawn normally; a full-canvas soft-light solid layer blacks out Dreams of the Deep Sea |
+| Effects on solid layers | 2 | Audio-bar layers show as bare white rectangles |
+| Puppet IK, bone physics | 1 | Reze: left hand IK, head and hair secondary motion |
 
 Solid (`flat`) layers and particles v1 landed on 2026-10-14; the census
 below is what they were sized from.

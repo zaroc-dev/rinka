@@ -1,7 +1,8 @@
 //! Layered scenes with effect passes, composed in gamma space.
 //!
-//! Each layer is a textured quad on the canvas, or a particle system whose
-//! sprites are drawn as instanced quads. A layer with effects is
+//! Each layer is a textured quad on the canvas, a textured mesh
+//! ([`crate::mesh`]), or a particle system whose sprites are drawn as
+//! instanced quads. A layer with effects is
 //! first processed offscreen: every effect pass draws a full-layer quad with
 //! a translated shader, reading the previous result as texture slot 0, into
 //! one of two ping-pong buffers. The final buffer is then composited.
@@ -9,13 +10,16 @@
 //! Effect shaders get the uniforms Wallpaper Engine provides by name:
 //! `g_Time`, `g_ModelViewProjectionMatrix` (identity: the quad is in clip
 //! space), `g_TextureNResolution` (texture size twice, as images are stored
-//! without padding), `g_PointerPosition` (centered; no input yet) and audio
-//! spectra (silence). Material values come from the pass. Anything else
-//! reads zero.
+//! without padding), `g_PointerPosition` and `g_ParallaxPosition` (centered;
+//! no input yet), `g_EffectTextureProjectionMatrix` and its inverse
+//! (identity: effects run in the layer's own texture space), `g_Screen`
+//! (canvas width, height and aspect) and audio spectra (silence). Material
+//! values come from the pass. Anything else reads zero.
 
 use std::collections::HashMap;
 
 use crate::image::ImageData;
+use crate::mesh::{Mesh, MeshPlayer};
 use crate::particles::{Simulation, Sprite, sprite_quad};
 use crate::project::{Fit, LayerBlend, SceneContent, ShaderInfo, UniformInfo};
 use crate::render::{GpuImage, Renderer};
@@ -31,6 +35,8 @@ pub struct SceneAssets {
     pub textures: HashMap<String, ImageData>,
     /// WGSL source by project path.
     pub shaders: HashMap<String, String>,
+    /// Layer meshes by project path.
+    pub meshes: HashMap<String, Mesh>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -65,6 +71,16 @@ fn vs_layer(@builtin(vertex_index) i: u32) -> VsOut {
     var out: VsOut;
     out.pos = vec4<f32>(dot(layer.row_x.xyz, p), dot(layer.row_y.xyz, p), 0.0, 1.0);
     out.uv = corner;
+    return out;
+}
+
+// Mesh vertices in the same unit-quad space, with their own coordinates.
+@vertex
+fn vs_mesh(@location(0) corner: vec2<f32>, @location(1) uv: vec2<f32>) -> VsOut {
+    let p = vec3<f32>(corner, 1.0);
+    var out: VsOut;
+    out.pos = vec4<f32>(dot(layer.row_x.xyz, p), dot(layer.row_y.xyz, p), 0.0, 1.0);
+    out.uv = uv;
     return out;
 }
 
@@ -172,6 +188,23 @@ struct QuadGpu {
     passes: Vec<Pass>,
     /// Ping-pong effect buffers, kept alive for the bind groups.
     _buffers: Vec<wgpu::Texture>,
+    mesh: Option<Box<MeshGpu>>,
+}
+
+/// Floats per mesh vertex: unit-quad position and texture coordinates.
+const MESH_FLOATS: usize = 4;
+
+struct MeshGpu {
+    mesh: Mesh,
+    player: MeshPlayer,
+    animated: bool,
+    /// Whether the vertex buffer holds a pose yet.
+    posed: bool,
+    vertices: wgpu::Buffer,
+    indices: wgpu::Buffer,
+    index_count: u32,
+    positions: Vec<f32>,
+    data: Vec<f32>,
 }
 
 struct ParticleGpu {
@@ -191,6 +224,7 @@ pub struct GpuScene {
     content: SceneContent,
     layers: Vec<LayerGpu>,
     pipelines: [wgpu::RenderPipeline; 3],
+    mesh_pipelines: [wgpu::RenderPipeline; 3],
     particle_pipelines: [wgpu::RenderPipeline; 3],
     quad: wgpu::Buffer,
 }
@@ -253,10 +287,12 @@ fn blend_index(blend: LayerBlend) -> usize {
     }
 }
 
+/// Quad pipelines, or with `mesh` the pipelines for indexed mesh vertices.
 fn layer_pipelines(
     device: &wgpu::Device,
     format: wgpu::TextureFormat,
     layout: &wgpu::BindGroupLayout,
+    mesh: bool,
 ) -> [wgpu::RenderPipeline; 3] {
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("rinka layer"),
@@ -267,18 +303,33 @@ fn layer_pipelines(
         bind_group_layouts: &[Some(layout)],
         immediate_size: 0,
     });
+    let attributes = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2];
+    let mesh_buffers = [Some(wgpu::VertexBufferLayout {
+        array_stride: (MESH_FLOATS * 4) as u64,
+        step_mode: wgpu::VertexStepMode::Vertex,
+        attributes: &attributes,
+    })];
+    let (entry, buffers, topology) = if mesh {
+        (
+            "vs_mesh",
+            &mesh_buffers[..],
+            wgpu::PrimitiveTopology::TriangleList,
+        )
+    } else {
+        ("vs_layer", &[][..], wgpu::PrimitiveTopology::TriangleStrip)
+    };
     layer_blends().map(|blend| {
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("rinka layer"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &module,
-                entry_point: Some("vs_layer"),
+                entry_point: Some(entry),
                 compilation_options: Default::default(),
-                buffers: &[],
+                buffers,
             },
             primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                topology,
                 ..Default::default()
             },
             depth_stencil: None,
@@ -466,7 +517,18 @@ impl GpuScene {
                 sampler_entry(2, wgpu::ShaderStages::FRAGMENT),
             ],
         });
-        let pipelines = layer_pipelines(device, target_format.remove_srgb_suffix(), &layer_layout);
+        let pipelines = layer_pipelines(
+            device,
+            target_format.remove_srgb_suffix(),
+            &layer_layout,
+            false,
+        );
+        let mesh_pipelines = layer_pipelines(
+            device,
+            target_format.remove_srgb_suffix(),
+            &layer_layout,
+            true,
+        );
         let particle_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("rinka particles"),
             entries: &[
@@ -647,6 +709,7 @@ impl GpuScene {
                         (&input, input_size),
                         &clamp_sampler,
                         output,
+                        (content.width, content.height),
                     );
                     passes.push(built);
                     input = output.clone();
@@ -673,17 +736,30 @@ impl GpuScene {
                     },
                 ],
             });
+            let mesh = match &layer.mesh {
+                Some(m) => {
+                    let mesh = assets
+                        .meshes
+                        .get(&m.source)
+                        .ok_or_else(|| SceneError::Missing(m.source.clone()))?
+                        .clone();
+                    Some(Box::new(mesh_gpu(device, queue, mesh, &m.animations)))
+                }
+                None => None,
+            };
             layers.push(LayerGpu::Quad(QuadGpu {
                 params,
                 bind_group,
                 passes,
                 _buffers: buffers,
+                mesh,
             }));
         }
         Ok(Self {
             content: content.clone(),
             layers,
             pipelines,
+            mesh_pipelines,
             particle_pipelines,
             quad,
         })
@@ -863,6 +939,27 @@ impl GpuScene {
                 alpha,
             ];
             queue.write_buffer(&gpu.params, 0, bytemuck::cast_slice(&params));
+            if let (Some(m), Some(lm)) = (&mut gpu.mesh, &layer.mesh)
+                && (m.animated || !m.posed)
+            {
+                m.player
+                    .positions(&m.mesh, &lm.animations, time, &mut m.positions);
+                // Layer pixels → the unit quad the params map.
+                let (sx, sy) = (1.0 / layer.size[0].max(1e-6), 1.0 / layer.size[1].max(1e-6));
+                m.data.clear();
+                for (p, uv) in m
+                    .positions
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .zip(m.mesh.uvs.as_chunks::<2>().0)
+                {
+                    m.data
+                        .extend_from_slice(&[p[0] * sx, p[1] * sy, uv[0], uv[1]]);
+                }
+                queue.write_buffer(&m.vertices, 0, bytemuck::cast_slice(&m.data));
+                m.posed = true;
+            }
         }
 
         let c = self.content.clear_color;
@@ -890,11 +987,20 @@ impl GpuScene {
             }
             let blend = blend_index(layer.blend);
             match gpu {
-                LayerGpu::Quad(q) => {
-                    rp.set_pipeline(&self.pipelines[blend]);
-                    rp.set_bind_group(0, &q.bind_group, &[]);
-                    rp.draw(0..4, 0..1);
-                }
+                LayerGpu::Quad(q) => match &q.mesh {
+                    Some(m) => {
+                        rp.set_pipeline(&self.mesh_pipelines[blend]);
+                        rp.set_bind_group(0, &q.bind_group, &[]);
+                        rp.set_vertex_buffer(0, m.vertices.slice(..));
+                        rp.set_index_buffer(m.indices.slice(..), wgpu::IndexFormat::Uint32);
+                        rp.draw_indexed(0..m.index_count, 0, 0..1);
+                    }
+                    None => {
+                        rp.set_pipeline(&self.pipelines[blend]);
+                        rp.set_bind_group(0, &q.bind_group, &[]);
+                        rp.draw(0..4, 0..1);
+                    }
+                },
                 LayerGpu::Particles(p) if p.count > 0 => {
                     rp.set_pipeline(&self.particle_pipelines[blend]);
                     rp.set_bind_group(0, &p.bind_group, &[]);
@@ -909,9 +1015,50 @@ impl GpuScene {
     /// Whether frames change over time (effects or particles animate).
     pub fn animated(&self) -> bool {
         self.layers.iter().any(|l| match l {
-            LayerGpu::Quad(q) => !q.passes.is_empty(),
+            LayerGpu::Quad(q) => {
+                !q.passes.is_empty() || q.mesh.as_ref().is_some_and(|m| m.animated)
+            }
             LayerGpu::Particles(_) => true,
         })
+    }
+}
+
+fn mesh_gpu(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    mesh: Mesh,
+    animations: &[crate::mesh::MeshAnimation],
+) -> MeshGpu {
+    let n = mesh.vertex_count().max(1);
+    let vertices = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("rinka mesh vertices"),
+        size: (n * MESH_FLOATS * 4) as u64,
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    // An empty mesh still needs a buffer to bind; it draws nothing.
+    let index_data: &[u32] = if mesh.indices.is_empty() {
+        &[0; 4]
+    } else {
+        &mesh.indices
+    };
+    let indices = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("rinka mesh indices"),
+        size: (index_data.len() * 4).next_multiple_of(4) as u64,
+        usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    queue.write_buffer(&indices, 0, bytemuck::cast_slice(index_data));
+    MeshGpu {
+        player: MeshPlayer::new(&mesh),
+        animated: MeshPlayer::animated(&mesh, animations),
+        posed: false,
+        vertices,
+        indices,
+        index_count: mesh.indices.len() as u32,
+        positions: Vec::new(),
+        data: Vec::new(),
+        mesh,
     }
 }
 
@@ -926,6 +1073,7 @@ fn build_pass(
     (input, input_size): (&wgpu::TextureView, (u32, u32)),
     clamp_sampler: &wgpu::Sampler,
     output: &wgpu::TextureView,
+    canvas: (u32, u32),
 ) -> Pass {
     let vis = wgpu::ShaderStages::VERTEX_FRAGMENT;
     let mut entries = Vec::new();
@@ -952,8 +1100,24 @@ fn build_pass(
     if let Some(f) = field("g_ModelViewProjectionMatrix") {
         write_field(&mut data, f, &IDENTITY);
     }
-    if let Some(f) = field("g_PointerPosition") {
-        write_field(&mut data, f, &[0.5, 0.5]);
+    for name in ["g_PointerPosition", "g_ParallaxPosition"] {
+        if let Some(f) = field(name) {
+            write_field(&mut data, f, &[0.5, 0.5]);
+        }
+    }
+    // A zero matrix here is not harmless: `depthparallax` normalizes its
+    // rows and the NaN spreads over the whole layer.
+    for name in [
+        "g_EffectTextureProjectionMatrix",
+        "g_EffectTextureProjectionMatrixInverse",
+    ] {
+        if let Some(f) = field(name) {
+            write_field(&mut data, f, &IDENTITY);
+        }
+    }
+    if let Some(f) = field("g_Screen") {
+        let (w, h) = (canvas.0 as f32, canvas.1 as f32);
+        write_field(&mut data, f, &[w, h, w / h.max(1.0)]);
     }
     let mut slot_views: Vec<(u32, wgpu::TextureView, wgpu::Sampler, (u32, u32))> = Vec::new();
     for &slot in &info.textures {

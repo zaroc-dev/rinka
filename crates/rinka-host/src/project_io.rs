@@ -31,8 +31,8 @@ pub fn asset_path(dir: &Path, relative: &str) -> Result<PathBuf, Error> {
     Ok(path)
 }
 
-/// Loads the textures (raw, as scenes compose in gamma space) and shaders
-/// of a scene project.
+/// Loads the textures (raw, as scenes compose in gamma space), shaders and
+/// layer meshes of a scene project.
 pub fn scene_assets(
     dir: &Path,
     project: &Project,
@@ -55,6 +55,15 @@ pub fn scene_assets(
                 std::fs::read_to_string(asset_path(dir, path)?).map_err(|e| err(path, &e))?;
             assets.shaders.insert(path.clone(), text);
         }
+    }
+    for path in scene
+        .layers
+        .iter()
+        .filter_map(|l| Some(&l.mesh.as_ref()?.source))
+    {
+        let text = std::fs::read_to_string(asset_path(dir, path)?).map_err(|e| err(path, &e))?;
+        let mesh = rinka_engine::mesh::Mesh::from_json(&text).map_err(|e| err(path, &e))?;
+        assets.meshes.insert(path.clone(), mesh);
     }
     Ok(Some(assets))
 }

@@ -15,7 +15,14 @@ export interface SceneContent {
   width: number;
   height: number;
   fit?: Fit;
-  layers: { id: string; name: string; visible: boolean; effects: { id: string; name: string }[] }[];
+  layers: {
+    id: string;
+    name: string;
+    visible: boolean;
+    effects: { id: string; name: string }[];
+    /** Mesh asset (`rinka.mesh`) the layer is drawn through. */
+    mesh?: { source: string };
+  }[];
   textures: Record<string, { clamp?: boolean; nearest?: boolean }>;
   shaders: Record<string, { vertex: string; fragment: string }>;
 }

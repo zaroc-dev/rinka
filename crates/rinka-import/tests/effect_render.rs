@@ -111,6 +111,7 @@ fn translated_effect_runs_on_a_layer() {
                 }],
             }],
             particles: None,
+            mesh: None,
         }],
         textures: BTreeMap::from([
             (
@@ -139,6 +140,7 @@ fn translated_effect_runs_on_a_layer() {
             ("shaders/invert.vert.wgsl".into(), t.vertex.clone()),
             ("shaders/invert.frag.wgsl".into(), t.fragment.clone()),
         ]),
+        meshes: HashMap::new(),
     };
     let scene = GpuScene::new(
         &device,

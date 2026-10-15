@@ -4,15 +4,17 @@ use std::collections::{BTreeMap, HashMap};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
+use rinka_engine::mesh::MeshAnimation;
 use rinka_engine::project::{
-    Content, Effect, EffectPass, Fit, Layer, LayerBlend, Project, Provenance, SceneColorSpace,
-    SceneContent, ShaderInfo, TextureInfo, UniformInfo,
+    Content, Effect, EffectPass, Fit, Layer, LayerBlend, LayerMesh, Project, Provenance,
+    SceneColorSpace, SceneContent, ShaderInfo, TextureInfo, UniformInfo,
 };
 use serde_json::Value;
 
 use crate::assets::Resolver;
 use crate::particles::{self, Overrides};
 use crate::pkg::Package;
+use crate::puppet;
 use crate::report::{Item, Report, Source, Status};
 use crate::shader;
 use crate::tex;
@@ -491,13 +493,35 @@ fn seed(layer_id: &str) -> u64 {
 
 /// Uniforms the engine provides; anything else not set by the material
 /// reads zero.
-const PROVIDED: &[&str] = &["g_Time", "g_ModelViewProjectionMatrix"];
+const PROVIDED: &[&str] = &[
+    "g_Time",
+    "g_ModelViewProjectionMatrix",
+    "g_EffectTextureProjectionMatrix",
+    "g_EffectTextureProjectionMatrixInverse",
+    "g_Screen",
+];
 
 impl SceneBuilder {
     /// Decodes `materials/<name>.tex` (or an existing path) into a PNG
     /// asset and returns its project path.
     fn texture(&mut self, name: &str, effect_dir: Option<&str>) -> Result<String, String> {
-        let key = format!("{}|{name}", effect_dir.unwrap_or(""));
+        self.texture_as(name, effect_dir, false)
+    }
+
+    /// Like [`Self::texture`], with one- and two-channel formats rewritten
+    /// for particle sprites ([`tex::as_particle_sprite`]).
+    fn particle_texture(&mut self, name: &str) -> Result<String, String> {
+        self.texture_as(name, None, true)
+    }
+
+    fn texture_as(
+        &mut self,
+        name: &str,
+        effect_dir: Option<&str>,
+        particle: bool,
+    ) -> Result<String, String> {
+        let kind = if particle { "particle|" } else { "" };
+        let key = format!("{kind}{}|{name}", effect_dir.unwrap_or(""));
         if let Some(p) = self.texture_paths.get(&key) {
             return Ok(p.clone());
         }
@@ -531,6 +555,9 @@ impl SceneBuilder {
                 frame.height.max(1.0) as u32,
             )
             .to_image();
+        }
+        if particle {
+            tex::as_particle_sprite(t.format, &mut image);
         }
         self.store(&key, name, &image, flags)
     }
@@ -576,8 +603,9 @@ impl SceneBuilder {
         Ok(project_path)
     }
 
-    /// A sprite sheet: the whole sheet as one asset and its frames as
-    /// texture-coordinate rectangles. `None` for a single-image texture.
+    /// A particle sprite sheet: the whole sheet as one asset (rewritten as
+    /// [`Self::particle_texture`] does) and its frames as texture-coordinate
+    /// rectangles. `None` for a single-image texture.
     fn sheet(&mut self, name: &str) -> Result<Option<Sheet>, String> {
         let path = if name.ends_with(".tex") {
             name.to_owned()
@@ -595,10 +623,12 @@ impl SceneBuilder {
         if t.frames.iter().any(|f| f.image != 0) {
             return Err(format!("sprite sheet {name} spans several images"));
         }
-        let image = t
+        let mut image = t
             .images
             .first()
+            .cloned()
             .ok_or_else(|| format!("texture {name} has no image"))?;
+        tex::as_particle_sprite(t.format, &mut image);
         let (w, h) = (image.width() as f32, image.height() as f32);
         let frames = t
             .frames
@@ -608,7 +638,7 @@ impl SceneBuilder {
         let key = format!("sheet|{name}");
         let project_path = match self.texture_paths.get(&key) {
             Some(p) => p.clone(),
-            None => self.store(&key, name, image, t.flags)?,
+            None => self.store(&key, name, &image, t.flags)?,
         };
         Ok(Some((project_path, frames)))
     }
@@ -701,6 +731,7 @@ impl SceneBuilder {
             blend,
             effects: Vec::new(),
             particles: None,
+            mesh: None,
         }
     }
 
@@ -811,7 +842,7 @@ impl SceneBuilder {
                 if let Err(e) = other {
                     item.partial(format!("{e}; particles show its first frame"));
                 }
-                match self.texture(texture_name, None) {
+                match self.particle_texture(texture_name) {
                     Ok(p) => (p, None),
                     Err(e) => {
                         item.partial(format!("{path}: {e}; the system is missing"));
@@ -842,6 +873,7 @@ impl SceneBuilder {
             blend,
             effects: Vec::new(),
             particles: Some(converted.system),
+            mesh: None,
         });
         for (i, child) in converted.children.iter().enumerate() {
             let local = Transform {
@@ -987,12 +1019,18 @@ impl SceneBuilder {
         if get("perspective").and_then(value::boolean).unwrap_or(false) {
             item.partial("perspective layers are drawn flat");
         }
-        if get("animationlayers")
-            .and_then(Value::as_array)
-            .is_some_and(|a| !a.is_empty())
-        {
-            item.partial("puppet animation is not supported");
-        }
+        let mesh = match model.get("puppet").and_then(Value::as_str) {
+            Some(path) => self.puppet(path, obj, item),
+            None => {
+                if get("animationlayers")
+                    .and_then(Value::as_array)
+                    .is_some_and(|a| !a.is_empty())
+                {
+                    item.partial("animation layers without a puppet model are ignored");
+                }
+                None
+            }
+        };
 
         let mut effects = Vec::new();
         for effect in get("effects")
@@ -1045,7 +1083,106 @@ impl SceneBuilder {
             blend,
             effects,
             particles: None,
+            mesh,
         })
+    }
+
+    /// Converts a puppet warp model into a mesh asset with the object's
+    /// animation layers. `None` (the layer stays a quad) if it cannot be read.
+    fn puppet(&mut self, path: &str, obj: &Value, item: &mut Item) -> Option<LayerMesh> {
+        let Some(bytes) = self.resolver.read(path, None) else {
+            item.partial(format!(
+                "puppet model {path} not found; the image is drawn flat"
+            ));
+            return None;
+        };
+        let puppet = match puppet::parse(&bytes) {
+            Ok(p) => p,
+            Err(e) => {
+                item.partial(format!("puppet model {path}: {e}; the image is drawn flat"));
+                return None;
+            }
+        };
+        let mut animations = Vec::new();
+        for layer in obj
+            .get("animationlayers")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let Some(id) = layer.get("animation").and_then(Value::as_i64) else {
+                continue;
+            };
+            let name = layer.get("name").and_then(Value::as_str).unwrap_or("?");
+            if !puppet.mesh.animations.iter().any(|a| a.id == id) {
+                item.partial(format!("puppet animation {name} is not in the model"));
+                continue;
+            }
+            let field = |k: &str| layer.get(k).and_then(value::float);
+            for k in ["rate", "blend", "visible"] {
+                if let Some(v) = layer.get(k) {
+                    let (_, extras) = value::unwrap(v);
+                    if extras.script || extras.animation {
+                        item.partial(format!(
+                            "puppet animation {name}: {k} is animated or scripted; its static value is used"
+                        ));
+                    }
+                }
+            }
+            if layer.get("additive").and_then(value::boolean) == Some(false) {
+                item.partial(format!(
+                    "puppet animation {name} is not additive; it blends as if it were"
+                ));
+            }
+            if layer.get("blendin").and_then(value::boolean) == Some(true)
+                || layer.get("blendout").and_then(value::boolean) == Some(true)
+            {
+                item.partial(format!(
+                    "puppet animation {name}: blending in and out is not supported"
+                ));
+            }
+            animations.push(MeshAnimation {
+                animation: id,
+                rate: field("rate").unwrap_or(1.0),
+                blend: field("blend").unwrap_or(1.0),
+                visible: layer
+                    .get("visible")
+                    .and_then(value::boolean)
+                    .unwrap_or(true),
+            });
+        }
+        let named = |i: usize| {
+            let n = &puppet.bone_names[i];
+            if n.is_empty() {
+                format!("{}", i + 1)
+            } else {
+                n.clone()
+            }
+        };
+        for (i, c) in puppet.constraints.iter().enumerate() {
+            if c.ik {
+                item.partial(format!(
+                    "puppet bone {}: inverse kinematics are not applied",
+                    named(i)
+                ));
+            }
+            if c.physics {
+                item.partial(format!(
+                    "puppet bone {}: physics (secondary motion) is not simulated",
+                    named(i)
+                ));
+            }
+        }
+        let json = puppet.mesh.to_json();
+        let stem = sanitize(
+            path.trim_end_matches(".mdl")
+                .rsplit('/')
+                .next()
+                .unwrap_or(path),
+        );
+        let source = format!("meshes/{stem}-{}.json", short_hash(&path));
+        self.files.insert(source.clone(), json.into_bytes());
+        Some(LayerMesh { source, animations })
     }
 
     fn effect(&mut self, effect: &Value, item: &mut Item) -> Option<Effect> {
@@ -1214,6 +1351,8 @@ impl SceneBuilder {
                 }
                 let note = if u.name == "g_PointerPosition" {
                     "cursor interaction is inactive (the pointer stays centered)".to_owned()
+                } else if u.name == "g_ParallaxPosition" {
+                    "parallax input is inactive (the view stays centered)".to_owned()
                 } else if u.name.starts_with("g_AudioSpectrum") {
                     "audio response is silent".to_owned()
                 } else {
