@@ -213,6 +213,10 @@ fn video_timing(file: &std::path::Path, seconds: f64) -> anyhow::Result<()> {
             wait.unwrap_or(Duration::from_millis(5))
                 .min(Duration::from_millis(50)),
         );
+        anyhow::ensure!(
+            !player.stopped(),
+            "the decoder stopped after {shown} frames"
+        );
     }
     println!("frames {shown}, worst timing error {worst:.1} ms");
     Ok(())

@@ -245,8 +245,9 @@ impl Host {
         let project = project_io::load(dir)?;
         let video = project_io::video_asset(dir, &project)?
             .map(|path| {
-                let (_, frame) = crate::video::first_frame(&path)?;
-                Ok((Player::open(&path)?, frame))
+                let mut player = Player::open(&path)?;
+                let frame = player.first_frame()?;
+                Ok((player, frame))
             })
             .transpose()
             .map_err(|e: anyhow::Error| {
@@ -524,6 +525,10 @@ impl Host {
                 .as_mut()
                 .map(|p| p.poll(now))
                 .unwrap_or((None, None));
+            if w.player.as_ref().is_some_and(Player::stopped) {
+                // Its last frame stays on screen as a still.
+                w.player = None;
+            }
             if let Some(frame) = frame {
                 w.video_frame = Some(frame);
             }

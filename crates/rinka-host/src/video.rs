@@ -44,6 +44,7 @@ pub struct VideoInfo {
 }
 
 /// One decoded frame with its presentation time on the looping timeline.
+#[derive(Clone)]
 pub struct OwnedFrame {
     pub pts: f64,
     /// Presentation time within the file.
@@ -464,7 +465,12 @@ fn decode_loop(
             if let Some(floor) = seek_floor {
                 // Decoding from the keyframe before a seek target.
                 if pts + 1e-6 < floor {
-                    before_seek = Some(frame.clone());
+                    // Keep it without copying; the next frame decodes into
+                    // the buffer it replaces.
+                    let spare = before_seek
+                        .take()
+                        .unwrap_or_else(ffmpeg::frame::Video::empty);
+                    before_seek = Some(std::mem::replace(&mut frame, spare));
                     continue;
                 }
                 seek_floor = None;
@@ -516,6 +522,8 @@ pub struct Player {
     shown: Option<(f64, f64)>,
     /// A seek must supply a new still frame even when playback is paused.
     seeking: bool,
+    /// The decode thread has ended; no more frames will come.
+    stopped: bool,
 }
 
 impl Player {
@@ -530,7 +538,29 @@ impl Player {
             paused_at: None,
             shown: None,
             seeking: false,
+            stopped: false,
         })
+    }
+
+    /// Waits for the first decoded frame and returns a copy; playback still
+    /// starts with it. Fails when the video has no decodable frame.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn first_frame(&mut self) -> anyhow::Result<OwnedFrame> {
+        if self.pending.is_none() {
+            let frame = self
+                .decoder
+                .frames
+                .recv()
+                .map_err(|_| anyhow!("no decodable frame"))?;
+            self.pending = Some(frame);
+        }
+        Ok(self.pending.clone().expect("pending frame"))
+    }
+
+    /// The decode thread ended (it logged why). Hosts keep the last frame
+    /// as a still.
+    pub fn stopped(&self) -> bool {
+        self.stopped
     }
 
     fn position(&self, now: Instant) -> Option<f64> {
@@ -554,7 +584,11 @@ impl Player {
                 None => match self.decoder.frames.try_recv() {
                     Ok(f) => f,
                     // The decoder is behind: check again shortly.
-                    Err(_) => return (due, Some(Duration::from_millis(4))),
+                    Err(TryRecvError::Empty) => return (due, Some(Duration::from_millis(4))),
+                    Err(TryRecvError::Disconnected) => {
+                        self.stopped = true;
+                        return (due, None);
+                    }
                 },
             };
             if frame.generation < self.generation {
@@ -675,6 +709,7 @@ mod tests {
                 paused_at: None,
                 shown: None,
                 seeking: false,
+                stopped: false,
             },
             tx,
             commands,
@@ -707,6 +742,40 @@ mod tests {
         );
         let looped = p.poll(start + Duration::from_millis(200)).0.unwrap();
         assert_eq!((looped.pts, looped.file_pts), (0.20, 0.0));
+    }
+
+    #[test]
+    fn a_finished_decoder_stops_the_clock_instead_of_polling() {
+        let (mut p, tx, _commands) = player();
+        tx.send(frame(0.0, 0.0, 0)).unwrap();
+        drop(tx);
+        let now = Instant::now();
+        let (shown, wait) = p.poll(now);
+        assert_eq!(shown.unwrap().file_pts, 0.0);
+        assert_eq!(wait, None);
+        assert!(p.stopped());
+        assert!(p.poll(now + Duration::from_secs(1)).0.is_none());
+    }
+
+    #[test]
+    fn first_frame_is_still_played() {
+        let (mut p, tx, _commands) = player();
+        tx.send(frame(0.0, 0.0, 0)).unwrap();
+        tx.send(frame(0.04, 0.04, 0)).unwrap();
+        assert_eq!(p.first_frame().unwrap().file_pts, 0.0);
+        let start = Instant::now();
+        assert_eq!(p.poll(start).0.unwrap().file_pts, 0.0);
+        assert_eq!(
+            p.poll(start + Duration::from_millis(40))
+                .0
+                .unwrap()
+                .file_pts,
+            0.04
+        );
+
+        let (mut p, tx, _commands) = player();
+        drop(tx);
+        assert!(p.first_frame().is_err());
     }
 
     #[test]
