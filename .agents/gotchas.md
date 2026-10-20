@@ -17,6 +17,14 @@ something costs more than a few minutes.
 - **`fetchPnpmDeps` needs `fetcherVersion = 4`** with pnpm ≥ 11. After a
   lockfile change, set the hash to a placeholder, build, and paste the `got:`
   hash.
+- **Windows check from Linux needs mingw headers.** With FFmpeg on Windows,
+  `cargo check --target x86_64-pc-windows-msvc` runs ffmpeg-sys-next's
+  bindgen, which parsed the FFmpeg headers with the shell's glibc flags
+  (`__float128 is not supported on this target`). The dev shell sets
+  `BINDGEN_EXTRA_CLANG_ARGS_x86_64_pc_windows_msvc` to mingw-w64's headers,
+  with `-D__X86INTRIN_H` so winnt.h does not pull in AMX types Rust rejects.
+  After changing it, `cargo clean -p ffmpeg-sys-next --target …`: the cached
+  bindings are not rebuilt on their own.
 - **wasm-bindgen must match exactly.** The crate is pinned to the
   `wasm-bindgen-cli` version in nixpkgs (`=0.2.129`). Bump both together.
 
