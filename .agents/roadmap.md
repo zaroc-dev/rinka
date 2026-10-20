@@ -101,7 +101,8 @@ scenes each.
   color, thumbnail and restore checks pass, including native desktop pixels.
   Broad codec/recovery tests, native/preview real-screen equality, the covered-
   monitor GPU measurement (#3) and installer acceptance remain open
-  (`docs/windows-host.md`).
+  (`docs/windows-host.md`). Deferred on 2026-10-20: Windows is not a primary
+  target, and video plays well on the developer's machine.
 - Niri: whether covered background surfaces still get frame callbacks (#3).
 - Wayland host decodes images on its main thread (blocks the loop on large
   images). The Windows host renders off the window thread but still decodes

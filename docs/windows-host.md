@@ -204,6 +204,11 @@ and smoke libraries stay under ignored `target/`; no personal art is published.
 
 ## Still unverified or incomplete
 
+Deferred on 2026-10-20: Windows is not a primary target. The developer ran
+video wallpapers on Windows and reported them working, with slightly better
+performance than Wallpaper Engine (their observation, not measured here). The
+robustness checks below are left for later.
+
 - Native/preview real-screen equality across video matrices/ranges and display
   scaling. Native BT.709 screen pixels and the full-range preview composite
   above pass; those are different checks and are not a complete equality gate.

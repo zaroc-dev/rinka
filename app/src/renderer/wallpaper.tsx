@@ -63,11 +63,15 @@ export function Wallpaper({ entry, entries, outputs, host, onEdited, onDelete, o
     return () => canvas.remove();
   }, []);
 
-  // Native video color metadata can arrive after the thumbnail worker
-  // finishes. Reopen the preview with that metadata when it becomes known.
+  // A different wallpaper resets the draft.
   useEffect(() => {
     setProject(entry.project);
     setApplyOpen(false);
+  }, [entry.id, entry.assetPrefix]);
+
+  // Loads the preview. Native video color metadata can arrive after the
+  // thumbnail worker finishes; reopen the preview when it becomes known.
+  useEffect(() => {
     setLoadError(null);
     showEntry(entry).catch((e) => setLoadError(errorMessage(e)));
   }, [entry.id, entry.assetPrefix, entry.videoColor?.matrix, entry.videoColor?.full_range]);
