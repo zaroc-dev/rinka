@@ -21,7 +21,9 @@ use anyhow::Context;
 use raw_window_handle::{
     RawDisplayHandle, RawWindowHandle, Win32WindowHandle, WindowsDisplayHandle,
 };
-use rinka_engine::{FrameOutcome, GpuInfo, Project, Renderer, Source, SurfaceSetup, gpu};
+use rinka_engine::{
+    FrameOutcome, GpuInfo, Project, Renderer, Source, SurfaceSetup, VideoTexture, gpu,
+};
 use serde_json::{Value, json};
 use windows_sys::Win32::Foundation::{HINSTANCE, HWND};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -30,6 +32,7 @@ use crate::clock::SceneClock;
 use crate::control::{self, Command};
 use crate::project_io::{self, ImageCache};
 use crate::protocol::{Error, ErrorCode, Reply, Request};
+use crate::video::{OwnedFrame, Player};
 
 mod coverage;
 mod desktop;
@@ -199,6 +202,9 @@ struct Wallpaper {
     image: Option<PathBuf>,
     /// Loaded assets of a scene project.
     scene: Option<std::sync::Arc<rinka_engine::SceneAssets>>,
+    player: Option<Player>,
+    video_frame: Option<OwnedFrame>,
+    video_texture: Option<VideoTexture>,
     /// The scene's clock; it stops while animation is paused.
     scene_clock: SceneClock,
     /// The scene animates and the next frame is due at this instant.
@@ -225,6 +231,7 @@ struct Prepared {
     project: Project,
     image: Option<PathBuf>,
     scene: Option<std::sync::Arc<rinka_engine::SceneAssets>>,
+    video: Option<(Player, OwnedFrame)>,
 }
 
 impl Host {
@@ -236,12 +243,16 @@ impl Host {
     /// before anything on screen changes.
     fn prepare(&mut self, dir: &Path) -> Result<Prepared, Error> {
         let project = project_io::load(dir)?;
-        if project_io::video_asset(dir, &project)?.is_some() {
-            return Err(Error::new(
-                ErrorCode::Project,
-                "video wallpapers are not supported on Windows yet",
-            ));
-        }
+        let video = project_io::video_asset(dir, &project)?
+            .map(|path| {
+                let mut player = Player::open(&path)?;
+                let frame = player.first_frame()?;
+                Ok((player, frame))
+            })
+            .transpose()
+            .map_err(|e: anyhow::Error| {
+                Error::new(ErrorCode::Project, format!("opening video: {e:#}"))
+            })?;
         let image = project_io::image_asset(dir, &project)?;
         if let Some(path) = &image {
             self.images.decode(path)?;
@@ -252,6 +263,7 @@ impl Host {
             project,
             image,
             scene,
+            video,
         })
     }
 
@@ -265,12 +277,23 @@ impl Host {
                 // has built successfully. An invalid scene must not erase a
                 // working wallpaper or leave an old scene under a new name.
                 let window = self.create_window(index)?;
+                let paused = self.paused || self.outputs[index].covered;
+                let (mut player, video_frame) = match prepared.video {
+                    Some((player, frame)) => (Some(player), Some(frame)),
+                    None => (None, None),
+                };
+                if paused && let Some(player) = &mut player {
+                    player.pause(Instant::now());
+                }
                 let previous = self.outputs[index].wallpaper.replace(Wallpaper {
                     project_dir: prepared.dir,
                     project: prepared.project,
                     image: prepared.image,
                     scene: prepared.scene,
-                    scene_clock: SceneClock::new(Instant::now(), self.paused),
+                    player,
+                    video_frame,
+                    video_texture: None,
+                    scene_clock: SceneClock::new(Instant::now(), paused),
                     next_frame: None,
                     dirty: false,
                     shown: false,
@@ -369,19 +392,36 @@ impl Host {
                 setup,
                 target,
             });
-            // Bind the project's image below.
+            // Bind the project's image or video below.
             w.dirty = true;
         }
         let gpu = self.gpu.as_mut().expect("gpu initialized");
         let t = w.target.as_mut().expect("target created");
         let index = gpu.renderer_index(t.setup.render_format);
         let renderer = &gpu.renderers[index].1;
+        if let Some(frame) = w.video_frame.take() {
+            let yuv = frame.as_yuv();
+            if w.video_texture
+                .as_ref()
+                .is_none_or(|video| !video.fits(&yuv))
+            {
+                w.video_texture = Some(renderer.create_video_texture(&gpu.device, &yuv));
+                w.dirty = true;
+            }
+            let video = w.video_texture.as_mut().expect("video texture");
+            video.upload(&gpu.queue, &yuv);
+            t.target.set_video_color(video.matrix, video.range);
+        }
         if w.dirty {
             let image = w
                 .image
                 .as_deref()
                 .and_then(|p| self.images.gpu_image(p, renderer, &gpu.device, &gpu.queue));
-            let source = image.as_ref().map(Source::Image);
+            let source = match (&image, &w.video_texture) {
+                (Some(image), _) => Some(Source::Image(image)),
+                (None, Some(video)) => Some(Source::Yuv(video)),
+                _ => None,
+            };
             t.target
                 .set_project(&gpu.device, renderer, &w.project, source);
             if let (rinka_engine::Content::Scene(content), Some(assets)) =
@@ -471,39 +511,78 @@ impl Host {
         if let Some(at) = self.rebuild_at {
             soonest(at.saturating_duration_since(Instant::now()));
         }
+        // A successful rebuild must resume players before deciding whether
+        // any timer is needed; otherwise an idle video could stay paused.
+        let now = Instant::now();
+        self.update_playback_state(now);
         for index in 0..self.outputs.len() {
-            // A covered output or paused animation keeps its due frame; it
-            // is drawn as soon as the output is uncovered or resumed.
-            if self.paused || self.outputs[index].covered {
+            let slot = &mut self.outputs[index];
+            let Some(w) = slot.wallpaper.as_mut() else {
                 continue;
+            };
+            let (frame, video_wait) = w
+                .player
+                .as_mut()
+                .map(|p| p.poll(now))
+                .unwrap_or((None, None));
+            if w.player.as_ref().is_some_and(Player::stopped) {
+                // Its last frame stays on screen as a still.
+                w.player = None;
             }
-            let due = self.outputs[index]
-                .wallpaper
-                .as_ref()
-                .and_then(|w| w.next_frame);
-            let Some(mut due) = due else { continue };
-            if due <= now {
-                if let Err(e) = self.draw(index) {
-                    log::error!("{}: {}", self.outputs[index].monitor.name, e.message);
-                    self.outputs[index]
-                        .wallpaper
-                        .as_mut()
-                        .expect("wallpaper")
-                        .next_frame = None;
-                }
-                match self.outputs[index]
+            if let Some(frame) = frame {
+                w.video_frame = Some(frame);
+            }
+            let video_due = video_wait.map(|wait| now + wait);
+            let paused_scene =
+                self.paused && w.target.as_ref().is_some_and(|t| t.target.animated());
+            // A seek may update the still image while globally paused.
+            // Covered windows retain that frame until they become visible.
+            let draw = !slot.covered
+                && w.window.is_some()
+                && (w.video_frame.is_some()
+                    || (!paused_scene && w.next_frame.is_some_and(|due| due <= now)));
+            if draw && let Err(e) = self.draw(index) {
+                log::error!("{}: {}", self.outputs[index].monitor.name, e.message);
+                self.outputs[index]
                     .wallpaper
-                    .as_ref()
-                    .and_then(|w| w.next_frame)
-                {
-                    Some(d) => due = d,
-                    None => continue,
-                }
+                    .as_mut()
+                    .expect("wallpaper")
+                    .next_frame = None;
             }
             let now = Instant::now();
-            soonest(due.saturating_duration_since(now));
+            if let Some(due) = video_due {
+                soonest(due.saturating_duration_since(now));
+            }
+            if !self.outputs[index].covered
+                && let Some(w) = self.outputs[index].wallpaper.as_ref()
+                && !(self.paused && w.target.as_ref().is_some_and(|t| t.target.animated()))
+                && let Some(due) = w.next_frame
+            {
+                soonest(due.saturating_duration_since(now));
+            }
         }
         next
+    }
+
+    fn update_playback_state(&mut self, now: Instant) {
+        for slot in &mut self.outputs {
+            let Some(w) = slot.wallpaper.as_mut() else {
+                continue;
+            };
+            let paused = self.paused || slot.covered || w.window.is_none();
+            if paused {
+                w.scene_clock.pause(now);
+            } else {
+                w.scene_clock.resume(now);
+            }
+            if let Some(player) = &mut w.player {
+                if paused {
+                    player.pause(now);
+                } else {
+                    player.resume(now);
+                }
+            }
+        }
     }
 
     /// Handles what the window thread saw.
@@ -714,18 +793,12 @@ impl Host {
             // Animation stops and the last frame stays on screen.
             Request::Pause => {
                 self.paused = true;
-                let now = Instant::now();
-                for w in self.outputs.iter_mut().filter_map(|s| s.wallpaper.as_mut()) {
-                    w.scene_clock.pause(now);
-                }
+                self.update_playback_state(Instant::now());
                 Ok(Value::Null)
             }
             Request::Resume => {
                 self.paused = false;
-                let now = Instant::now();
-                for w in self.outputs.iter_mut().filter_map(|s| s.wallpaper.as_mut()) {
-                    w.scene_clock.resume(now);
-                }
+                self.update_playback_state(Instant::now());
                 Ok(Value::Null)
             }
             Request::Seek { output, position } => {
@@ -735,7 +808,17 @@ impl Host {
                         "seek position must be finite and non-negative",
                     ));
                 }
-                self.target_outputs(output.as_deref())?;
+                let targets = self.target_outputs(output.as_deref())?;
+                let now = Instant::now();
+                for (index, _) in targets {
+                    if let Some(player) = self.outputs[index]
+                        .wallpaper
+                        .as_mut()
+                        .and_then(|w| w.player.as_mut())
+                    {
+                        player.seek(position, now);
+                    }
+                }
                 Ok(Value::Null)
             }
             Request::Shutdown => {
@@ -815,7 +898,15 @@ impl Host {
                     "scale_factor": scale,
                     "transform": "Normal",
                     "assigned": self.assignments.get(&m.name),
-                    "video": null,
+                    "video": w.and_then(|w| w.player.as_ref()).map(|p| json!({
+                        "codec": p.info.codec,
+                        "size": (p.info.width, p.info.height),
+                        "frame_rate": p.info.frame_rate,
+                        "duration": p.info.duration,
+                        "position": p.position_in_video(Instant::now()),
+                        "paused": p.is_paused(),
+                        "hidden": s.covered || w.is_some_and(|w| w.window.is_none()),
+                    })),
                     "surface": w.map(|w| json!({
                         "logical_size": m.size(),
                         "buffer_size": m.size(),

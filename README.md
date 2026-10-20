@@ -110,7 +110,7 @@ not signed, so SmartScreen will warn before the first start.
 | Particles, solid and composition layers, multi-buffer effects | Next, in the order measured scenes need them |
 | Text, sound, SceneScript, 3D | Planned |
 | Layer editor, project stacks | Planned |
-| Windows | Experimental color, image and scene playback; video and desktop acceptance checks remain open |
+| Windows | Color, image, video and scene playback; broader desktop and installer acceptance checks remain open |
 
 Milestone notes with measurements: [M0](docs/m0-baseline.md),
 [M1 images](docs/m1-images.md), [M2 video](docs/m2-video.md),

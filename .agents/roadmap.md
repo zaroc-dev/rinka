@@ -1,6 +1,6 @@
 # Roadmap
 
-Status as of 2026-10-14. Measurements behind each line are in `docs/`.
+Status as of 2026-10-15. Measurements behind each line are in `docs/`.
 
 ## Milestones
 
@@ -8,7 +8,7 @@ Status as of 2026-10-14. Measurements behind each line are in `docs/`.
 | --- | --- | --- |
 | M0 | Solid colors, native + WASM preview, background surfaces, host lifecycle | Done on Niri |
 | M1 | Images: fits, background color, library, thumbnails | Done on Niri |
-| M2 | FFmpeg video: PTS timing, loop, pause/seek, preview decode path | Done on Niri |
+| M2 | FFmpeg video: PTS timing, loop, pause/seek, preview decode path | Done on Niri; Windows playback and targeted acceptance implemented |
 | M3 | Wallpaper Engine scene import + project layer editor + project stacks | Import partly done; editor and stacks not started |
 | M4 | Compatibility from measured failures: particles, multi-pass, animation, scripts, audio | Particles v1, solid layers and puppet warp done (`docs/m4-particles.md`, `docs/m4-puppets.md`) |
 | M5 | Broader editing, packaging, more desktops | Not started |
@@ -96,10 +96,13 @@ scenes each.
 
 - Hyprland: untested.
 - Fractional scaling, output reconnection and pausing on power-off: untested.
-- Windows: experimental color/image/scene playback, named-pipe control,
-  covered-monitor pausing and tray. Native video, the covered-monitor GPU
-  measurement (#3) and screen acceptance checks remain open
-  (`docs/windows-host.md`).
+- Windows: color/image/video/scene playback, named-pipe control, covered-monitor
+  pausing and tray. Video uses the shared FFmpeg decoder; generated seek/loop,
+  color, thumbnail and restore checks pass, including native desktop pixels.
+  Broad codec/recovery tests, native/preview real-screen equality, the covered-
+  monitor GPU measurement (#3) and installer acceptance remain open
+  (`docs/windows-host.md`). Deferred on 2026-10-20: Windows is not a primary
+  target, and video plays well on the developer's machine.
 - Niri: whether covered background surfaces still get frame callbacks (#3).
 - Wayland host decodes images on its main thread (blocks the loop on large
   images). The Windows host renders off the window thread but still decodes

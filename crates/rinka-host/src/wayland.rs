@@ -411,7 +411,8 @@ impl Host {
                     .wallpaper
                     .as_mut()
                     .expect("wallpaper exists");
-                if w.video != video {
+                // A player whose decoder stopped is retried on reassignment.
+                if w.video != video || (video.is_some() && w.player.is_none()) {
                     w.player = None;
                     w.video_texture = None;
                     w.video_frame = None;
@@ -668,6 +669,10 @@ impl Host {
                 w.hidden = true;
             }
             let (frame, wait) = player.poll(now);
+            if player.stopped() {
+                // Its last frame stays on screen as a still.
+                w.player = None;
+            }
             if let Some(frame) = frame {
                 w.video_frame = Some(frame);
             }

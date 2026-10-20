@@ -1,11 +1,11 @@
 # Windows host: first playback path
 
-Measured on 2026-10-14. This is an experimental playback path, not completion
-of the Windows video gate or the desktop acceptance checks.
+Measured on 2026-10-14 and 2026-10-15. Native video playback is implemented;
+the remaining desktop and cross-platform acceptance checks are listed below.
 
 ## Scope
 
-The native host now presents colors, images and converted scenes through the
+The native host presents colors, images, video and converted scenes through the
 existing Rust engine. Each monitor gets an input-transparent, nonactivating
 child window behind Explorer's desktop icons. It handles both the classic
 WorkerW layout and the Windows 11 raised desktop layout (layered children of
@@ -22,8 +22,8 @@ take the pipe name first; the host then refuses to start.
 
 The host uses two threads. The window thread owns the wallpaper windows and
 only pumps messages, because Windows links its input queue to Explorer's
-desktop thread; loading, decoding, scene building and presenting run on the
-render thread.
+desktop thread; loading, scene building and presenting run on the render
+thread, with video decoding on bounded worker threads.
 
 Animation stops on monitors that other windows cover completely; the last
 frame stays on screen and the scene continues from its clock when
@@ -35,10 +35,10 @@ covered. Translucent windows that are not layered (acrylic, Mica) count as
 covering, so the wallpaper behind them freezes. `outputs` reports
 `surface.visible`; `capabilities` reports `visibility_pause: true`.
 
-Video projects are rejected explicitly. Scene animation uses the engine's
-scene clock and a waitable timer at 30 fps. Static wallpapers leave the
-message loop waiting without a periodic render timer. Rendering errors reach
-the assigning client and preserve that output's previous project.
+Video uses the shared FFmpeg decoder, scheduled by frame timestamps. Scene
+animation uses the engine's scene clock and a waitable timer at 30 fps. Static
+wallpapers leave the message loop waiting without a periodic render timer.
+Rendering errors reach the assigning client and preserve that output's previous project.
 
 ## Checks run
 
@@ -144,11 +144,74 @@ importer-version invalidation. No optimization was applied in this diagnosis.
 The diagnostic executable, raw timing records, and scratch imported project
 remain local under ignored `target/`; no personal artwork was published.
 
+## Native video (2026-10-15)
+
+Windows and Linux use the same `video.rs` FFmpeg software decoder and bounded
+six-frame queue. The Windows waitable timer schedules presentation from frame
+PTS, including VFR and a continuous looping timeline. Each output owns its
+player. Global pause, covered-monitor pause, resume and seek operate on its
+clock; paused seek updates the still frame. A replacement is decoded before
+assignment, so a broken video preserves the previous wallpaper.
+
+Thumbnails decode and upload YUV through the engine too. Their metadata gives
+the editor the native matrix/range, dimensions and duration. If metadata arrives
+after a video preview opens, the preview reloads with that metadata. RGB
+conversion remains in the shared engine shader; swscale only produces planar
+4:2:0 and now explicitly preserves matrix/range during conversion, including
+full-range JPEG 4:4:4. Playback remains muted and software-decoded.
+
+Windows builds use the pinned, hash-verified FFmpeg 9.0.2 shared SDK from
+[Gyan's builds](https://github.com/GyanD/codexffmpeg/releases/tag/9.0.2) and
+libclang 18.1.1 for bindgen. `app/scripts/setup-windows-video.ps1` downloads them
+under ignored `target/windows-tools` and sets the current session's build
+environment. No global tools or persistent PATH changes are installed. The
+host build copies the five required runtime DLLs beside the executable;
+Windows packaging includes them and the SDK's license/build-source notices.
+The release workflow prepares the SDK before building the Windows package.
+
+Checks on Windows 11, RTX 4070, Vulkan, three monitors:
+
+- All 21 host tests passed with the generated fixtures enabled. Tests cover
+  VFR scheduling/looping, paused and repeated seeks, seeking beyond the real
+  end, decoder metadata, and exact GPU pixel readback for BT.709 limited,
+  BT.601 full, 4:4:4 chroma (including full-range MJPEG), and untagged SD/HD.
+- Generated VFR `video-timing`, 3 seconds: 32 frames, worst error 0.5 ms.
+  This measures CPU scheduling, not screen presentation jitter.
+- Windows video smoke passed on an isolated pipe: playback, pause/resume,
+  paused seek, looping, failed assignment preservation, covered-monitor pause
+  and resume, client reconnection, static reassignment, saved-video restore,
+  video thumbnails, duration, size and color metadata.
+- A native GDI desktop capture on DISPLAY2 read **(26,112,115)**, exactly the
+  independent BT.709 limited-range equation for stored YUV (97,138,90).
+  A generated covering window paused the video's clock and then closed itself.
+- The existing Windows host smoke still passed. Static scene CPU was 125 ms
+  over 5 seconds in this debug run; this is not a release performance budget.
+- Editor full-range BT.601 H.264 smoke passed on WebCodecs with native probe
+  metadata and composited pixel **(44,121,115)**. The screenshot is Chromium's
+  `capturePage`, not real-screen proof. A later attempt to capture the preview
+  on screen was blocked by Windows application control after rebuilding the
+  native capture helper; no policy was changed.
+- Strict workspace Clippy (`--all-targets -- -D warnings`), TypeScript checking,
+  app bundling, 25 engine unit tests, 19 importer unit tests and the translated
+  effect GPU integration test passed. Full workspace execution stopped because
+  Windows application control blocked the existing `render_output` test EXE
+  (OS error 4551); the host's video GPU readback tests did execute successfully.
+- The host starts with its DLLs beside it and the FFmpeg SDK removed from PATH.
+  The installer/release package has not yet been installed and tested here.
+
+Reproduce the checks using `.agents/testing.md`. Generated fixtures, captures
+and smoke libraries stay under ignored `target/`; no personal art is published.
+
 ## Still unverified or incomplete
 
-- Exact desktop pixels and native/preview screen equality. GPU readback and
-  successful surface initialization are not screen capture evidence. The
-  available window-capture tool did not expose Explorer's wallpaper children.
+Deferred on 2026-10-20: Windows is not a primary target. The developer ran
+video wallpapers on Windows and reported them working, with slightly better
+performance than Wallpaper Engine (their observation, not measured here). The
+robustness checks below are left for later.
+
+- Native/preview real-screen equality across video matrices/ranges and display
+  scaling. Native BT.709 screen pixels and the full-range preview composite
+  above pass; those are different checks and are not a complete equality gate.
 - Full editor interaction and exact screen rendering. Editor build and the
   targeted smoke checks above pass; Linux/Nix checks were not run on this
   Windows machine.
@@ -159,10 +222,7 @@ remain local under ignored `target/`; no personal artwork was published.
   Windows: GPU time with a maximized window or a fullscreen game, and how
   quickly a scene resumes. Powered-off displays and the lock screen do not
   pause yet.
-- Review changes after the first measurements (window thread, re-placing
-  windows on display changes, pipe access list) compile and pass Clippy for
-  `x86_64-pc-windows-msvc` but have not run on Windows yet.
-- Native Windows FFmpeg video, video probing and video thumbnails. These
-  remain Linux-only. Pause/resume currently records video pause state; it
-  does not stop scene animation, matching the existing Wayland protocol.
+- Long-running video, damaged real-world files, hotplug/Explorer recovery
+  during video, and a broad codec/container survey. Decode tests include H.264,
+  FFV1, MJPEG, VFR and generated seek/loop fixtures; this is not exhaustive.
 - Windows packaging, startup integration and minimum-version acceptance.

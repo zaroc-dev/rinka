@@ -23,7 +23,7 @@ mod clock;
 mod control;
 #[cfg(any(target_os = "linux", windows))]
 mod restore;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", windows))]
 mod video;
 #[cfg(target_os = "linux")]
 mod wayland;
@@ -94,7 +94,7 @@ enum Cmd {
     Thumbnail,
     /// Play a video headlessly and print when each frame would be shown
     /// against its timestamp (development aid for timing checks).
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", windows))]
     VideoTiming {
         file: PathBuf,
         #[arg(long, default_value_t = 3.0)]
@@ -135,7 +135,7 @@ fn main() -> anyhow::Result<()> {
             println!("{}", serde_json::to_string_pretty(&report)?);
             Ok(())
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", windows))]
         Cmd::VideoTiming { file, seconds } => video_timing(&file, seconds),
     }
 }
@@ -184,7 +184,7 @@ fn info() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", windows))]
 fn video_timing(file: &std::path::Path, seconds: f64) -> anyhow::Result<()> {
     use std::time::{Duration, Instant};
     let mut player = video::Player::open(file)?;
@@ -212,6 +212,10 @@ fn video_timing(file: &std::path::Path, seconds: f64) -> anyhow::Result<()> {
         std::thread::sleep(
             wait.unwrap_or(Duration::from_millis(5))
                 .min(Duration::from_millis(50)),
+        );
+        anyhow::ensure!(
+            !player.stopped(),
+            "the decoder stopped after {shown} frames"
         );
     }
     println!("frames {shown}, worst timing error {worst:.1} ms");

@@ -17,6 +17,14 @@ something costs more than a few minutes.
 - **`fetchPnpmDeps` needs `fetcherVersion = 4`** with pnpm ≥ 11. After a
   lockfile change, set the hash to a placeholder, build, and paste the `got:`
   hash.
+- **Windows check from Linux needs mingw headers.** With FFmpeg on Windows,
+  `cargo check --target x86_64-pc-windows-msvc` runs ffmpeg-sys-next's
+  bindgen, which parsed the FFmpeg headers with the shell's glibc flags
+  (`__float128 is not supported on this target`). The dev shell sets
+  `BINDGEN_EXTRA_CLANG_ARGS_x86_64_pc_windows_msvc` to mingw-w64's headers,
+  with `-D__X86INTRIN_H` so winnt.h does not pull in AMX types Rust rejects.
+  After changing it, `cargo clean -p ffmpeg-sys-next --target …`: the cached
+  bindings are not rebuilt on their own.
 - **wasm-bindgen must match exactly.** The crate is pinned to the
   `wasm-bindgen-cli` version in nixpkgs (`=0.2.129`). Bump both together.
 
@@ -35,6 +43,17 @@ something costs more than a few minutes.
   4096 px; placement uses the original size, so the cap only costs sharpness.
 
 ## Video
+
+- **FFmpeg input seeks use microseconds.** `Input::seek` has no stream index;
+  passing stream-time-base ticks silently seeks to the wrong place. Do not
+  discard seek messages between packets; paused seek must still display its
+  new generation, and a seek past the real end needs the last decodable frame.
+- **swscale does not see frame color metadata.** Its plane-pointer API needs
+  explicit source/destination matrix and range. Otherwise full-range JPEG
+  4:4:4 becomes limited-range 4:2:0 while the engine still treats it as full.
+- **Output color tags can trigger conversion in newer FFmpeg.** Generated
+  fixtures set frame tags with `setparams` before encoding, as well as output
+  tags, or supposed constant YUV codes change. Verify stored plane bytes.
 
 - **Chromium's GPU video path gets colors wrong.** `copyExternalImageToTexture`
   and `new VideoFrame(videoElement)` give RGB already converted with the BT.601
