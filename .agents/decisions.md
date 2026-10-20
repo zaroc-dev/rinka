@@ -25,6 +25,7 @@ reason here in the same change.
 | Detached `rinka-host` process with JSON-lines over a Unix socket (Linux) or local named pipe (Windows) | Wallpapers survive the editor; both transports share the v1 protocol; frames never cross IPC. |
 | Host also is the CLI for import and thumbnails | Native decoders (FFmpeg, full-size images, pkg/tex) in one place; the editor spawns it with JSON jobs. |
 | Background layer-shell surface per output, one composed surface per monitor | Compositor stacking is not a layering mechanism; the engine composes. |
+| niri overview backdrop: a separate blurred, dimmed still, refreshed when the overview opens | niri shows backdrop surfaces only through a user layer rule, so the wallpaper itself cannot be both. A still costs one small draw per change; tracking every video frame would double the work for something visible only in the overview. |
 | Output assignments live in `~/.config/rinka/config.json`, not in projects | Projects stay portable; `serve --restore` reads the same file. |
 | Releases from version tags: Fedora RPM, Windows NSIS installer + zip, Nix `stable` branch | The RPM is built on the Fedora release whose FFmpeg matches nixpkgs, so its soname requirements are real; `stable` is fast-forwarded by CI so flake users follow releases with `nix flake update`. |
 

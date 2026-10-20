@@ -285,7 +285,7 @@ struct MipGenerator {
     sampler: wgpu::Sampler,
 }
 
-fn fullscreen_pipeline(
+pub(crate) fn fullscreen_pipeline(
     device: &wgpu::Device,
     label: &str,
     module: &wgpu::ShaderModule,
@@ -325,7 +325,7 @@ fn fullscreen_pipeline(
     })
 }
 
-fn texture_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+pub(crate) fn texture_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
         visibility: wgpu::ShaderStages::FRAGMENT,
@@ -338,7 +338,7 @@ fn texture_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     }
 }
 
-fn sampler_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+pub(crate) fn sampler_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
         visibility: wgpu::ShaderStages::FRAGMENT,
@@ -347,7 +347,11 @@ fn sampler_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     }
 }
 
-fn sampler(device: &wgpu::Device, label: &str, address: wgpu::AddressMode) -> wgpu::Sampler {
+pub(crate) fn sampler(
+    device: &wgpu::Device,
+    label: &str,
+    address: wgpu::AddressMode,
+) -> wgpu::Sampler {
     device.create_sampler(&wgpu::SamplerDescriptor {
         label: Some(label),
         address_mode_u: address,

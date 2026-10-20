@@ -91,6 +91,19 @@ something costs more than a few minutes.
   `Wallpaper` matters; `Drop` clears the target first.
 - **Background layer order.** A newer surface stacks above older ones in the
   same layer; shells like yuki keep their own wallpaper surfaces there.
+- **FIFO stalls on hidden surfaces.** niri sends no frame callbacks to the
+  overview backdrop surface while the overview is closed, and a second FIFO
+  present there blocked the event loop for 774 ms. Backdrop surfaces present
+  with Mailbox or Immediate.
+- **Particle time must not go back.** Rendering a scene at an earlier time
+  replays its particle systems from the start. Draw a backdrop still at the
+  wallpaper's own frame time or later.
+- **Backdrop visibility needs a niri rule.** Without a
+  `place-within-backdrop` rule matching `^rinka-backdrop$` the surface stays
+  below the wallpaper and the overview shows niri's backdrop color. Check
+  `niri msg layers` before debugging rendering.
+- **Test with several outputs.** A shadowed `index` in `draw()` (output
+  vs. renderer index) passed every single-output test, because both were 0.
 - **Process checks.** `pgrep -x rinka-host` can match another host, and
   `pgrep -f` matches the `nix develop` wrapper. Find the PID by comm *and*
   socket argument.

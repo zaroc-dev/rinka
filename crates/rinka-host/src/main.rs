@@ -21,6 +21,8 @@ mod thumbnail;
 mod clock;
 #[cfg(any(target_os = "linux", windows))]
 mod control;
+#[cfg(target_os = "linux")]
+mod niri;
 #[cfg(any(target_os = "linux", windows))]
 mod restore;
 #[cfg(any(target_os = "linux", windows))]

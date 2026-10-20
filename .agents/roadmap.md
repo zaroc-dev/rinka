@@ -104,6 +104,9 @@ scenes each.
   (`docs/windows-host.md`). Deferred on 2026-10-20: Windows is not a primary
   target, and video plays well on the developer's machine.
 - Niri: whether covered background surfaces still get frame callbacks (#3).
+- niri overview backdrop: checked on a nested niri at scale 1 and drawn on
+  the three-output session. Fractional scales and the no-viewporter path are
+  untested.
 - Wayland host decodes images on its main thread (blocks the loop on large
   images). The Windows host renders off the window thread but still decodes
   on its render thread.
