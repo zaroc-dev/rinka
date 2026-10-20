@@ -570,8 +570,8 @@ impl Host {
                 return log::error!("surface offers no supported 8-bit format");
             };
             setup.configure(&surface, &gpu.device);
-            let index = gpu.renderer_index(setup.render_format);
-            let renderer = &gpu.renderers[index].1;
+            let renderer = gpu.renderer_index(setup.render_format);
+            let renderer = &gpu.renderers[renderer].1;
             let target = renderer.create_target(&gpu.device, &w.project, None);
             w.target = Some(Target {
                 surface,
@@ -583,8 +583,8 @@ impl Host {
         }
         let gpu = self.gpu.as_mut().expect("gpu initialized");
         let t = w.target.as_mut().expect("target created");
-        let index = gpu.renderer_index(t.setup.render_format);
-        let renderer = &gpu.renderers[index].1;
+        let renderer = gpu.renderer_index(t.setup.render_format);
+        let renderer = &gpu.renderers[renderer].1;
         if let Some(frame) = w.video_frame.take() {
             let yuv = frame.as_yuv();
             if w.video_texture.as_ref().is_none_or(|v| !v.fits(&yuv)) {

@@ -27,10 +27,25 @@ in linear light, scaled to the output by the compositor through a viewport.
 | Static CPU | 0 s of host CPU over 10 s with an image wallpaper. |
 | Hidden presents | With FIFO, a second present to the hidden backdrop blocked for 774 ms. With Mailbox or Immediate, five presents in 200 ms took about 1 ms each. |
 
+## Real session (three outputs)
+
+Release build on the developer's niri session: two 1080×1920 portrait
+outputs with images, and a 2560×1440 output with a 13-layer animated scene
+(no color-blended layers).
+
+- The first run showed a bug the nested test could not: `draw()` shadowed
+  the output index with the renderer index, so each scene frame redrew a
+  portrait output's backdrop (28 draws/s) and never refreshed its own.
+  Fixed; the run after the fix drew exactly one still per output at start,
+  and none afterwards.
+- Still draw time (CPU, acquire to present): 0.4 ms for the 144×256
+  portrait stills, 1.0 ms for the scene's 455×256 still. The scene's next
+  frame took 1.19 ms against a 1.28 ms mean over 135 frames.
+
 ## Unverified
 
-- The user's own niri session (real outputs, yuki running), fractional
-  scales, several outputs, output hotplug.
+- The overview on the real session (needs the user's layer rule),
+  fractional scales, output hotplug.
 - The no-viewporter path (still sampled up to the logical size).
 - Animated scenes: the code path is shared with video (redraw on open), but
   no scene was checked on screen.
