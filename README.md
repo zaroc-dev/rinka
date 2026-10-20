@@ -88,6 +88,18 @@ Download `Rinka-Setup-<version>.exe`, or the zip to run it without
 installing. Colors, images and scenes play; video does not yet. The builds are
 not signed, so SmartScreen will warn before the first start.
 
+### niri overview backdrop
+
+Under niri, Rinka also draws a blurred, dimmed copy of each wallpaper for the
+overview (Mod+Tab). niri shows it only with this layer rule in your config:
+
+```kdl
+layer-rule {
+    match namespace="^rinka-backdrop$"
+    place-within-backdrop true
+}
+```
+
 ### Notes
 
 - The editor's preview needs hardware WebGPU. On NixOS, Chromium's GPU sandbox

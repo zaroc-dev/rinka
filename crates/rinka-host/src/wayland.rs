@@ -9,6 +9,9 @@
 //! waits for it, so drawing follows the compositor's pace. A surface whose
 //! callback does not arrive (hidden or powered-off output) pauses its video
 //! clock until the compositor asks for frames again.
+//!
+//! Under niri each wallpaper has a second surface, a blurred and dimmed still
+//! for the overview backdrop (see [`Backdrop`]).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -20,7 +23,8 @@ use raw_window_handle::{
     RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle,
 };
 use rinka_engine::{
-    FrameOutcome, GpuInfo, Project, Renderer, Source, SurfaceSetup, VideoTexture, gpu,
+    BackdropRenderer, FrameOutcome, GpuInfo, Project, Renderer, Source, SurfaceSetup, VideoTexture,
+    backdrop, gpu,
 };
 use serde_json::{Value, json};
 use smithay_client_toolkit::{
@@ -116,6 +120,20 @@ pub fn run(endpoint: PathBuf, assignments: HashMap<String, PathBuf>) -> anyhow::
         })
         .map_err(|e| anyhow::anyhow!("inserting control channel: {e}"))?;
 
+    let niri = crate::niri::socket();
+    if let Some(socket) = niri.clone() {
+        let (tx, rx) = channel::channel::<()>();
+        event_loop
+            .handle()
+            .insert_source(rx, |event, _, host: &mut Host| {
+                if let channel::Event::Msg(()) = event {
+                    host.overview_opened();
+                }
+            })
+            .map_err(|e| anyhow::anyhow!("inserting niri channel: {e}"))?;
+        crate::niri::watch_overview(socket, move || tx.send(()).is_ok());
+    }
+
     let mut host = Host {
         registry: RegistryState::new(&globals),
         output_state: OutputState::new(&globals, &qh),
@@ -134,6 +152,7 @@ pub fn run(endpoint: PathBuf, assignments: HashMap<String, PathBuf>) -> anyhow::
         outputs: Vec::new(),
         assignments,
         paused: false,
+        backdrops: niri.is_some(),
         stop: event_loop.get_signal(),
     };
     // Learn the outputs and their names before accepting requests.
@@ -167,6 +186,8 @@ struct Gpu {
     queue: wgpu::Queue,
     /// One per surface format in use; normally a single entry.
     renderers: Vec<(wgpu::TextureFormat, Renderer)>,
+    /// Likewise for backdrop surfaces.
+    backdrops: Vec<(wgpu::TextureFormat, BackdropRenderer)>,
 }
 
 impl Gpu {
@@ -179,6 +200,17 @@ impl Gpu {
                 let renderer = Renderer::new(&self.device, &self.queue, format);
                 self.renderers.push((format, renderer));
                 self.renderers.len() - 1
+            }
+        }
+    }
+
+    fn backdrop_index(&mut self, format: wgpu::TextureFormat) -> usize {
+        match self.backdrops.iter().position(|(f, _)| *f == format) {
+            Some(i) => i,
+            None => {
+                let renderer = BackdropRenderer::new(&self.device, format);
+                self.backdrops.push((format, renderer));
+                self.backdrops.len() - 1
             }
         }
     }
@@ -203,6 +235,8 @@ struct Host {
     /// reconnected output gets its wallpaper back.
     assignments: HashMap<String, PathBuf>,
     paused: bool,
+    /// Wallpapers get overview backdrop surfaces (under niri).
+    backdrops: bool,
     stop: LoopSignal,
 }
 
@@ -234,6 +268,7 @@ struct Wallpaper {
     hidden: bool,
     /// The project changed since the target was last updated.
     dirty: bool,
+    backdrop: Option<Backdrop>,
     // Field order matters: the wgpu surface must drop before the wl_surface
     // owned by `layer`.
     target: Option<Target>,
@@ -252,6 +287,39 @@ struct Target {
     surface: wgpu::Surface<'static>,
     setup: SurfaceSetup,
     target: rinka_engine::Target,
+}
+
+/// A blurred, dimmed still of a wallpaper on its own background surface,
+/// for niri's overview backdrop. niri moves it there only when a layer rule
+/// with `place-within-backdrop` matches its namespace; otherwise it stacks
+/// below the wallpaper, unseen.
+///
+/// The still is drawn when the wallpaper's content or size changes and, for
+/// animated wallpapers, each time the overview opens.
+struct Backdrop {
+    // Field order matters: the wgpu surface must drop before `layer`.
+    target: Option<BackdropTarget>,
+    viewport: Option<wp_viewport::WpViewport>,
+    layer: LayerSurface,
+    /// Size in surface-local (logical) coordinates; zero until configured.
+    logical: (u32, u32),
+    /// The wallpaper buffer size the current still was drawn for; `None`
+    /// when it needs drawing.
+    drawn_for: Option<(u32, u32)>,
+}
+
+struct BackdropTarget {
+    surface: wgpu::Surface<'static>,
+    setup: SurfaceSetup,
+}
+
+impl Drop for Backdrop {
+    fn drop(&mut self) {
+        self.target = None;
+        if let Some(v) = self.viewport.take() {
+            v.destroy();
+        }
+    }
 }
 
 /// A loaded project with its assets decoded or probed, ready to show.
@@ -326,13 +394,15 @@ impl Host {
         })
     }
 
-    fn create_wallpaper(&self, wl: &wl_output::WlOutput, prepared: Prepared) -> Wallpaper {
+    /// A full-output background surface with no exclusive zone, keyboard
+    /// focus or input region.
+    fn background_layer(&self, wl: &wl_output::WlOutput, namespace: &str) -> LayerSurface {
         let surface = self.compositor.create_surface(&self.qh);
         let layer = self.layer_shell.create_layer_surface(
             &self.qh,
             surface,
             Layer::Background,
-            Some("rinka-wallpaper"),
+            Some(namespace),
             Some(wl),
         );
         layer.set_anchor(Anchor::all());
@@ -346,6 +416,30 @@ impl Host {
                 .wl_surface()
                 .set_input_region(Some(region.wl_region()));
         }
+        layer
+    }
+
+    fn create_wallpaper(&self, wl: &wl_output::WlOutput, prepared: Prepared) -> Wallpaper {
+        // Created first: surfaces on one layer stack in creation order, so
+        // without niri's backdrop rule the backdrop stays under the wallpaper.
+        let backdrop = self.backdrops.then(|| {
+            let layer = self.background_layer(wl, "rinka-backdrop");
+            let viewport = match &self.scaling {
+                Scaling::Fractional(_, v) => {
+                    Some(v.get_viewport(layer.wl_surface(), &self.qh, NoEvents))
+                }
+                Scaling::Integer => None,
+            };
+            layer.commit();
+            Backdrop {
+                target: None,
+                viewport,
+                layer,
+                logical: (0, 0),
+                drawn_for: None,
+            }
+        });
+        let layer = self.background_layer(wl, "rinka-wallpaper");
         let (fractional, viewport) = match &self.scaling {
             Scaling::Fractional(f, v) => (
                 Some(f.get_fractional_scale(
@@ -376,6 +470,7 @@ impl Host {
             frame_pending: None,
             hidden: false,
             dirty: false,
+            backdrop,
             target: None,
             viewport,
             fractional,
@@ -456,24 +551,12 @@ impl Host {
         }
 
         if w.target.is_none() {
-            let display = RawDisplayHandle::Wayland(WaylandDisplayHandle::new(
-                NonNull::new(self.conn.backend().display_ptr().cast()).expect("display pointer"),
-            ));
-            let window = RawWindowHandle::Wayland(WaylandWindowHandle::new(
-                NonNull::new(w.layer.wl_surface().id().as_ptr().cast()).expect("surface pointer"),
-            ));
-            // SAFETY: both handles stay valid until the target is dropped,
-            // which `Wallpaper` guarantees happens before its wl_surface.
-            let surface = match unsafe {
-                self.instance
-                    .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
-                        raw_display_handle: Some(display),
-                        raw_window_handle: window,
-                    })
-            } {
-                Ok(s) => s,
-                Err(e) => return log::error!("creating GPU surface: {e}"),
-            };
+            // SAFETY: `Wallpaper` drops the target before its wl_surface.
+            let surface =
+                match unsafe { gpu_surface(&self.instance, &self.conn, w.layer.wl_surface()) } {
+                    Ok(s) => s,
+                    Err(e) => return log::error!("creating GPU surface: {e}"),
+                };
             if self.gpu.is_none() {
                 match init_gpu(&self.instance, Some(&surface)) {
                     Ok(gpu) => self.gpu = Some(gpu),
@@ -541,6 +624,9 @@ impl Host {
             }
             w.next_frame = t.target.animated().then(Instant::now);
             w.dirty = false;
+            if let Some(b) = &mut w.backdrop {
+                b.drawn_for = None;
+            }
         }
         let draw_start = Instant::now();
         let time = w.scene_clock.time(Instant::now());
@@ -581,10 +667,122 @@ impl Host {
                 w.target = None;
             }
         }
+        let backdrop_stale = w
+            .backdrop
+            .as_ref()
+            .is_some_and(|b| b.drawn_for != Some((width, height)));
         // A scene learns it animates on its first draw, which happens after
         // the assignment that would otherwise start the timer.
         if w.next_frame.is_some() {
             self.ensure_video_timer();
+        }
+        if backdrop_stale {
+            // The wallpaper's time: particle systems replay from the start
+            // when drawn at an earlier time than before.
+            self.draw_backdrop(index, time);
+        }
+    }
+
+    /// Draws the backdrop still of output `index` from its wallpaper at
+    /// scene time `time`, in a submission of its own.
+    fn draw_backdrop(&mut self, index: usize, time: f64) {
+        let Some(w) = self.outputs[index].wallpaper.as_mut() else {
+            return;
+        };
+        let output_size = w.buffer_size();
+        let (Some(b), Some(t), Some(gpu)) = (&mut w.backdrop, &mut w.target, &mut self.gpu) else {
+            return; // The wallpaper draws it once it has a target.
+        };
+        if b.logical.0 == 0 || b.logical.1 == 0 {
+            return; // Not configured yet.
+        }
+        // With a viewport the compositor scales the small still up; without
+        // one the still is sampled up to the logical size.
+        let (width, height) = match &b.viewport {
+            Some(v) => {
+                v.set_destination(b.logical.0 as i32, b.logical.1 as i32);
+                backdrop::still_size(output_size)
+            }
+            None => b.logical,
+        };
+        if b.target.is_none() {
+            // SAFETY: `Backdrop` drops the target before its wl_surface.
+            let surface =
+                match unsafe { gpu_surface(&self.instance, &self.conn, b.layer.wl_surface()) } {
+                    Ok(s) => s,
+                    Err(e) => return log::error!("creating backdrop GPU surface: {e}"),
+                };
+            let caps = surface.get_capabilities(&gpu.adapter);
+            let Some(mut setup) = SurfaceSetup::new(&caps, width, height) else {
+                return log::error!("backdrop surface offers no supported 8-bit format");
+            };
+            // The backdrop is hidden outside the overview and gets no frame
+            // callbacks there; FIFO would block a second present until it
+            // is shown again.
+            match [wgpu::PresentMode::Mailbox, wgpu::PresentMode::Immediate]
+                .into_iter()
+                .find(|m| caps.present_modes.contains(m))
+            {
+                Some(mode) => setup.config.present_mode = mode,
+                None => log::warn!(
+                    "backdrop surface offers only {:?}; redraws may stall while hidden",
+                    caps.present_modes
+                ),
+            }
+            setup.configure(&surface, &gpu.device);
+            b.target = Some(BackdropTarget { surface, setup });
+        }
+        let bt = b.target.as_mut().expect("backdrop target created");
+        if (bt.setup.config.width, bt.setup.config.height) != (width, height) {
+            bt.setup.resize(width, height);
+            bt.setup.configure(&bt.surface, &gpu.device);
+        }
+        let renderer = gpu.renderer_index(t.setup.render_format);
+        let backdrop = gpu.backdrop_index(bt.setup.render_format);
+        let (renderer, backdrop) = (&gpu.renderers[renderer].1, &gpu.backdrops[backdrop].1);
+        let draw_start = Instant::now();
+        let outcome = bt
+            .setup
+            .draw(&bt.surface, &gpu.device, &gpu.queue, |encoder, views, _| {
+                backdrop.render(
+                    &gpu.device,
+                    &gpu.queue,
+                    encoder,
+                    renderer,
+                    &mut t.target,
+                    t.setup.render_format,
+                    output_size,
+                    time,
+                    views,
+                );
+            });
+        match outcome {
+            FrameOutcome::Presented => {
+                log::debug!(
+                    "backdrop {width}x{height} presented in {:?}",
+                    draw_start.elapsed()
+                );
+                b.drawn_for = Some(output_size);
+            }
+            FrameOutcome::Skipped => log::debug!("backdrop frame skipped"),
+            FrameOutcome::Lost => {
+                log::warn!("backdrop surface lost; recreating on next draw");
+                b.target = None;
+            }
+        }
+    }
+
+    /// niri's overview opened: refresh the stills of animated wallpapers.
+    fn overview_opened(&mut self) {
+        let now = Instant::now();
+        for index in 0..self.outputs.len() {
+            let Some(w) = &self.outputs[index].wallpaper else {
+                continue;
+            };
+            if w.backdrop.is_some() && (w.player.is_some() || w.next_frame.is_some()) {
+                let time = w.scene_clock.time(now);
+                self.draw_backdrop(index, time);
+            }
         }
     }
 
@@ -687,6 +885,15 @@ impl Host {
             s.wallpaper
                 .as_ref()
                 .is_some_and(|w| w.layer.wl_surface() == surface)
+        })
+    }
+
+    fn find_backdrop(&self, surface: &wl_surface::WlSurface) -> Option<usize> {
+        self.outputs.iter().position(|s| {
+            s.wallpaper
+                .as_ref()
+                .and_then(|w| w.backdrop.as_ref())
+                .is_some_and(|b| b.layer.wl_surface() == surface)
         })
     }
 
@@ -830,6 +1037,8 @@ impl Host {
                 // compositor-specific adapters.
                 "global_pointer": false,
                 "visibility_pause": false,
+                // Shown only where a niri layer rule places it.
+                "overview_backdrop": self.backdrops,
             },
             "paused": self.paused,
         }))
@@ -867,6 +1076,12 @@ impl Host {
                         "buffer_size": w.buffer_size(),
                         "scale": f64::from(w.scale_120) / f64::from(SCALE_DENOMINATOR),
                         "presenting": w.target.is_some(),
+                        "backdrop": w.backdrop.as_ref().map(|b| json!({
+                            "logical_size": b.logical,
+                            "buffer_size": b.target.as_ref()
+                                .map(|t| (t.setup.config.width, t.setup.config.height)),
+                            "drawn_for": b.drawn_for,
+                        })),
                     })),
                 })
             })
@@ -901,7 +1116,33 @@ fn init_gpu(instance: &wgpu::Instance, surface: Option<&wgpu::Surface<'_>>) -> a
         device,
         queue,
         renderers: Vec::new(),
+        backdrops: Vec::new(),
     })
+}
+
+/// Creates a wgpu surface presenting to `surface`.
+///
+/// # Safety
+///
+/// The returned surface must be dropped before `surface` is destroyed.
+unsafe fn gpu_surface(
+    instance: &wgpu::Instance,
+    conn: &Connection,
+    surface: &wl_surface::WlSurface,
+) -> Result<wgpu::Surface<'static>, wgpu::CreateSurfaceError> {
+    let display = RawDisplayHandle::Wayland(WaylandDisplayHandle::new(
+        NonNull::new(conn.backend().display_ptr().cast()).expect("display pointer"),
+    ));
+    let window = RawWindowHandle::Wayland(WaylandWindowHandle::new(
+        NonNull::new(surface.id().as_ptr().cast()).expect("surface pointer"),
+    ));
+    // SAFETY: the handles stay valid as long as the caller promises.
+    unsafe {
+        instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
+            raw_display_handle: Some(display),
+            raw_window_handle: window,
+        })
+    }
 }
 
 impl CompositorHandler for Host {
@@ -1017,6 +1258,16 @@ impl OutputHandler for Host {
 
 impl LayerShellHandler for Host {
     fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, layer: &LayerSurface) {
+        if let Some(index) = self.find_backdrop(layer.wl_surface()) {
+            log::info!(
+                "compositor closed backdrop surface on {}",
+                self.output_name(&self.outputs[index].wl)
+            );
+            if let Some(w) = &mut self.outputs[index].wallpaper {
+                w.backdrop = None;
+            }
+            return;
+        }
         if let Some(index) = self.find_surface(layer.wl_surface()) {
             log::info!(
                 "compositor closed wallpaper surface on {}",
@@ -1034,6 +1285,18 @@ impl LayerShellHandler for Host {
         configure: LayerSurfaceConfigure,
         _: u32,
     ) {
+        if let Some(index) = self.find_backdrop(layer.wl_surface()) {
+            let w = self.outputs[index]
+                .wallpaper
+                .as_mut()
+                .expect("found wallpaper");
+            let b = w.backdrop.as_mut().expect("found backdrop");
+            b.logical = configure.new_size;
+            b.drawn_for = None;
+            let time = w.scene_clock.time(Instant::now());
+            self.draw_backdrop(index, time);
+            return;
+        }
         let Some(index) = self.find_surface(layer.wl_surface()) else {
             return;
         };

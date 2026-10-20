@@ -116,6 +116,11 @@ holds `{version: 1, assignments: {output: projectId}}`; the library is
   then every particle becomes one instance (clip-space center, two axes,
   color, two sprite-sheet frame rectangles and a blend) drawn as a
   triangle-strip quad with the layer's blend.
+- `BackdropRenderer` (`backdrop.rs`, per target format): an overview
+  backdrop still. The wallpaper's `Target` renders into a 256-line still as a
+  scaled-down output (the preview's path), which is blurred in two separable
+  Gaussian passes (σ 4 texels, `Rgba16Float`) and drawn at 55% brightness
+  and 90% saturation, both in linear light.
 
 ## Host (`rinka-host serve`)
 
@@ -132,6 +137,14 @@ holds `{version: 1, assignments: {output: projectId}}`; the library is
   and the next draw waits for it. No callback for 500 ms means hidden: the
   clock pauses.
 - Scenes with effects animate at 30 fps (`SCENE_FPS`) through the same timer.
+- Under niri (`$NIRI_SOCKET` set) each wallpaper also gets a `rinka-backdrop`
+  background surface, created before the wallpaper so it stacks below it.
+  A `place-within-backdrop` layer rule moves it into the overview backdrop.
+  It shows a still (`BackdropRenderer`) at `still_size` behind a viewport,
+  drawn when the wallpaper's content or buffer size changes and, for videos
+  and animated scenes, when niri's event stream (`niri.rs`, its own thread)
+  reports the overview opening. It presents with Mailbox or Immediate (see
+  gotchas).
 - `--restore [DIR]` reads the editor's `config.json` assignments at start.
 
 ## Control protocol (v1)
@@ -163,7 +176,8 @@ wallpaper windows, so nothing slow may run there.
 Newline-delimited JSON on `$XDG_RUNTIME_DIR/rinka/host.sock`. Each request
 `{"id", "cmd", …}` gets one response `{"id", "ok", "result" | "error": {code,
 message}}`. `hello {protocol: 1}` must come first. Commands: `capabilities`,
-`outputs` (names, geometry, transform, assignment, surface and video state),
+`outputs` (names, geometry, transform, assignment, surface, backdrop and
+video state),
 `assign {output?, project}`, `unassign {output?}`, `reload {project}`,
 `pause`, `resume`, `seek {output?, position}`, `shutdown`. Defined in
 `crates/rinka-host/src/protocol.rs`. `pause` stops all animation, videos and

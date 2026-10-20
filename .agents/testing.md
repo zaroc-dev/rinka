@@ -89,6 +89,23 @@ before calling a release done.
 - Wallpapers sit under windows; check an output with nothing over it, and
   remember the user's shell (yuki) has its own background surfaces.
 
+### niri overview backdrop
+
+Run a nested niri (it opens as a window) with a throwaway config, so neither
+the user's config nor their wallpapers change:
+
+```sh
+printf '%s\n' 'hotkey-overlay { skip-at-startup; }' \
+  'layer-rule { match namespace="^rinka-backdrop$"; place-within-backdrop true; }' \
+  > /tmp/niri-test.kdl
+env -u NIRI_SOCKET niri -c /tmp/niri-test.kdl &   # logs its sockets
+WAYLAND_DISPLAY=wayland-2 NIRI_SOCKET=/run/user/1000/niri.wayland-2.PID.sock \
+  nix develop -c ./target/debug/rinka-host serve --socket /tmp/test.sock
+```
+
+Then `niri msg action open-overview` and `grim` against the nested display.
+Remove the stale `wayland-2` socket files after killing it.
+
 ## Test content
 
 - Videos: generate with `nix run nixpkgs#ffmpeg -- -f lavfi …` (solid colors
