@@ -105,6 +105,25 @@
             };
           };
 
+          # wasm-bindgen's CLI must match the crate in Cargo.lock exactly. Build
+          # it here rather than taking nixpkgs' copy: consumers that make this
+          # flake follow their own nixpkgs would otherwise get a different CLI
+          # version and a failing build. Bump the hashes with the crate.
+          wasmBindgenVersion =
+            (lib.findFirst (p: p.name == "wasm-bindgen") null (lib.importTOML ./Cargo.lock).package).version;
+          wasm-bindgen-cli = pkgs.buildWasmBindgenCli rec {
+            src = pkgs.fetchCrate {
+              pname = "wasm-bindgen-cli";
+              version = wasmBindgenVersion;
+              hash = "sha256-pcecKQd7E8Opw6bkFoE569epUi7gh5qpQF1e5PJY6V8=";
+            };
+            cargoDeps = pkgs.rustPlatform.fetchCargoVendor {
+              inherit src;
+              inherit (src) pname version;
+              hash = "sha256-vmUrWVU7kPJJxO5qIVeAkwQyWDELO1Z4Z5gitz2kco8=";
+            };
+          };
+
           # The engine compiled to WebAssembly for the editor's live preview.
           rinka-wasm = pkgs.stdenv.mkDerivation {
             pname = "rinka-wasm";
@@ -114,7 +133,7 @@
             nativeBuildInputs = [
               rust
               rustPlatform.cargoSetupHook
-              pkgs.wasm-bindgen-cli
+              wasm-bindgen-cli
             ];
             buildPhase = ''
               runHook preBuild
@@ -189,7 +208,12 @@
           });
         in
         {
-          inherit rinka rinka-host rinka-wasm;
+          inherit
+            rinka
+            rinka-host
+            rinka-wasm
+            wasm-bindgen-cli
+            ;
           default = rinka;
         };
     in
@@ -246,7 +270,8 @@
             nativeBuildInputs = [ pkgs.rustPlatform.bindgenHook ];
             packages = with pkgs; [
               (rustToolchain pkgs)
-              wasm-bindgen-cli
+              # The same CLI the package build uses, matched to Cargo.lock.
+              (packagesFor pkgs).wasm-bindgen-cli
               binaryen
               pkg-config
               nodejs
