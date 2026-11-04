@@ -25,8 +25,12 @@ something costs more than a few minutes.
   with `-D__X86INTRIN_H` so winnt.h does not pull in AMX types Rust rejects.
   After changing it, `cargo clean -p ffmpeg-sys-next --target …`: the cached
   bindings are not rebuilt on their own.
-- **wasm-bindgen must match exactly.** The crate is pinned to the
-  `wasm-bindgen-cli` version in nixpkgs (`=0.2.129`). Bump both together.
+- **wasm-bindgen must match exactly.** The crate is pinned (`=0.2.129`) and
+  the flake builds `wasm-bindgen-cli` at the version in `Cargo.lock`, not
+  nixpkgs' copy: a consumer flake with `inputs.nixpkgs.follows` would bring a
+  different CLI and fail with "schema version" mismatch. When bumping the
+  crate, update the two hashes in `flake.nix` (set them to `lib.fakeHash`,
+  build, copy the reported hash).
 
 ## WebGPU in Electron
 
