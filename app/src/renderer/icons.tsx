@@ -115,3 +115,11 @@ export const SlidersIcon = () => (
     <circle cx="7" cy="14" r="2" />
   </Icon>
 );
+
+/** A film strip: the video file and its encoding. */
+export const FilmIcon = () => (
+  <Icon>
+    <rect x="3" y="3.5" width="14" height="13" rx="1.6" />
+    <path d="M6.5 3.5v13M13.5 3.5v13M3 7.5h3.5M3 12.5h3.5M13.5 7.5H17M13.5 12.5H17" />
+  </Icon>
+);

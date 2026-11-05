@@ -43,15 +43,24 @@ pub fn saved(dir: &Path) -> Saved {
         scene_fps: Option<u32>,
         sound_volume: Option<f32>,
         sound_muted: Option<bool>,
+        /// Read leniently: an unknown name keeps the default instead of
+        /// losing the assignments.
+        video_decoder: Option<serde_json::Value>,
     }
     let path = dir.join("config.json");
     match std::fs::read_to_string(&path).map(|t| serde_json::from_str::<Config>(&t)) {
         Ok(Ok(config)) => {
             let mut settings = HostSettings::default();
+            let video_decoder = config.video_decoder.and_then(|v| {
+                serde_json::from_value(v.clone())
+                    .inspect_err(|_| log::warn!("{}: unknown videoDecoder {v}", path.display()))
+                    .ok()
+            });
             let patch = crate::settings::SettingsPatch {
                 scene_fps: config.scene_fps,
                 volume: config.sound_volume,
                 muted: config.sound_muted,
+                video_decoder,
             };
             if let Err(e) = settings.apply(patch) {
                 log::warn!("{}: {}", path.display(), e.message);
@@ -77,6 +86,7 @@ pub fn saved(dir: &Path) -> Saved {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::settings::VideoDecoder;
 
     #[test]
     fn reads_assignments_and_settings() {
@@ -92,6 +102,14 @@ mod tests {
         assert_eq!(s.settings.scene_fps, 15);
         write(r#"{"version":1,"assignments":{},"sceneFps":1000}"#);
         assert_eq!(saved(&dir).settings, HostSettings::default());
+        write(r#"{"version":1,"assignments":{"DP-2":"abc"},"videoDecoder":"software"}"#);
+        let s = saved(&dir);
+        assert_eq!(s.settings.video_decoder, VideoDecoder::Software);
+        // An unknown decoder keeps the default and the assignments.
+        write(r#"{"version":1,"assignments":{"DP-2":"abc"},"videoDecoder":"quantum"}"#);
+        let s = saved(&dir);
+        assert_eq!(s.settings.video_decoder, VideoDecoder::Auto);
+        assert_eq!(s.assignments.len(), 1);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

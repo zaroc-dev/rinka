@@ -194,6 +194,7 @@ fn convert_video(
         source: source.clone(),
         fit: Fit::Cover,
         background: rinka_engine::Srgb8::BLACK,
+        original: None,
     };
     Ok(Some(Converted {
         project,

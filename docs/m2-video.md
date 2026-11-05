@@ -61,10 +61,61 @@ Status as of 2026-10-14. Covers milestone M2 (see .agents/roadmap.md).
 | Controls | Pause holds position, resume continues, seek lands at the target, positions wrap at the loop. |
 | On screen | Native playback on DP-2/DP-3 and preview playback in the editor, checked by screencopy. |
 
+## Hardware decoding (2026-11-05)
+
+The host spent ~380% CPU on two 4K H.264 wallpapers: a 3870×2160 120 fps
+video (58 Mbit/s) on a 1080p output and a 3840×2160 60 fps video texture in
+a scene. Decoding was in software, and every frame was copied once more out
+of FFmpeg.
+
+- **Decoders.** Playback tries NVDEC (CUDA), then VA-API on Linux, and
+  D3D11VA on Windows. A device is used only if it decoded the first frame
+  itself. Frames are copied back as NV12 and uploaded as Y plus an RG
+  chroma plane. The `video_decoder` setting (editor: Settings → Video)
+  picks one decoder or software. A decoder that cannot play a stream falls
+  back to software.
+- **No extra copy.** Queued frames hold a reference to FFmpeg's frame
+  instead of copying its planes, in software too.
+
+| Check | Result |
+| --- | --- |
+| Exactness | `hardware_frames_match_software_frames`: every frame of the H.264 fixtures (B-frames; full-range BT.601) from NVDEC and from VA-API equals software decoding code for code, with the same PTS, matrix and range. A one-bit change makes it fail. |
+| Engine NV12 | `yuv_frames_convert_with_their_matrix_and_range` passes for planar and interleaved chroma (GPU readback). |
+| CPU, `video-timing` 10 s, RTX 4070, i7 host | 4K120: software 2.2 cores (2.8 with the old copy) and drops ~17 frames per 10 s; NVDEC 0.37; VA-API via nvidia-vaapi-driver 0.62. 4K60: software 0.63, NVDEC 0.19, VA-API 0.33. |
+| CPU, host with both wallpapers | 67% with NVDEC against 289% in software, same outputs and content. What remains is copying frames back and uploading them (main thread ~33%, decode threads ~33%). |
+| Switching | `settings {video_decoder}` reopens running videos with the new decoder (status reports `decoder` per video and scene video); unavailable choices are rejected. |
+| Assign latency | The same with every decoder: device setup runs on the decode thread. |
+| Package | The `nix build .#rinka` host finds `libcuda`/`libnvcuvid` and VA-API drivers through FFmpeg's `/run/opengl-driver/lib` runpath. |
+
+Unverified: VA-API on Intel or AMD hardware (only through NVIDIA's
+translation driver here), D3D11VA on Windows, and 10-bit streams on the GPU
+(P010 goes through swscale to 8-bit).
+
+## Optimize video (2026-11-05)
+
+The editor's video file popover re-encodes a video project smaller or at
+a lower frame rate (`rinka-host transcode`). Resolution offers the
+standard heights below the source's (default: the smallest one that still
+covers the largest display). Frame rate offers 60 and 30 below the
+source's. The output is H.264 MP4 with the source's resolved matrix and
+range; the original stays in the project.
+
+| Check | Result |
+| --- | --- |
+| Colors | `software_keeps_colors_and_their_reading`: full-range BT.601 stays full-range BT.601; untagged 720-line input scaled to 360 lines is tagged BT.709. `gpu_encoders_keep_colors`: NVENC keeps the constant fixture codes within 2. |
+| Frame rate | `frame_rate_caps_drop_frames_evenly`: 30 → 15 fps gives 18 of 36 frames and a 15 fps container rate; a cap above the source changes nothing. |
+| Real file | 3870×2160 120 fps (33.8 MB) → 1936×1080 60 fps: NVENC in 5.2 s (10.6 MB), x264 in 7.6 s (5.8 MB). Playback: 0.40 → 0.12 cores with NVDEC, 2.2 → 0.5 in software. |
+| Editor | Smoke runs on a generated 1440p60 video: optimize (progress 0 → 100%, project points at the copy, original kept), re-optimize to 720p30 (starts from the original, previous copy deleted), restore (copy deleted, `original` gone), cancel (no `.part` left, project unchanged). |
+| Host | `reload` of an assigned project switches to the re-encoded file. |
+
+Unverified: VA-API encoding (NVIDIA's VA-API driver only decodes; the
+pipeline reaches the encoder, where it fails like the FFmpeg CLI does) and
+NVENC on Windows. Scene video textures cannot be optimized yet.
+
 ## Open
 
-- Hardware decoding (VA-API/NVDEC) and zero-copy upload: measured
-  optimization, later.
+- Zero-copy upload: frames go GPU → memory → GPU. Sharing them would need
+  Vulkan external memory, an optional wgpu feature the profile excludes.
 - WebCodecs demuxing for Matroska/WebM; they use the `<video>` fallback for
   now.
 - HDR and 10-bit: converted to 8-bit through swscale natively; the preview

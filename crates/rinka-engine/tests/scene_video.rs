@@ -94,6 +94,7 @@ fn render(matrix: ColorMatrix, full_range: bool, yuv: [u8; 3]) -> Option<(Vec<[u
         u_stride: 2,
         v: &v,
         v_stride: 2,
+        interleaved: false,
         // The project's matrix and range apply, not the frame's.
         matrix: ColorMatrix::Bt2020Ncl,
         range: ColorRange::Full,

@@ -48,8 +48,8 @@ pub enum Request {
     /// Continues animation from where it stopped.
     Resume,
     /// Changes host-wide playback settings (`scene_fps`, `volume` 0..=1,
-    /// `muted`); omitted ones stay as they are. Returns the settings in
-    /// effect.
+    /// `muted`, `video_decoder`); omitted ones stay as they are. Changing
+    /// the decoder reopens playing videos. Returns the settings in effect.
     Settings {
         #[serde(flatten)]
         patch: crate::settings::SettingsPatch,

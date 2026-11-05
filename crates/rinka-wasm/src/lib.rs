@@ -445,6 +445,7 @@ impl Preview {
             u_stride,
             v: plane(v_offset, v_stride, chroma_height)?,
             v_stride,
+            interleaved: false,
             matrix: match matrix {
                 0 => ColorMatrix::Bt601,
                 1 => ColorMatrix::Bt709,
@@ -515,6 +516,7 @@ impl Preview {
             u_stride,
             v: plane(v_offset, v_stride, chroma_height)?,
             v_stride,
+            interleaved: false,
             // Unused: the project's matrix and range apply.
             matrix: ColorMatrix::guess(height),
             range: ColorRange::Limited,

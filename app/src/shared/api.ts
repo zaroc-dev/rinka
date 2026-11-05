@@ -6,7 +6,14 @@ export const FITS: Fit[] = ["cover", "contain", "stretch", "center", "tile"];
 export type Content =
   | { type: "color"; color: string }
   | { type: "image"; source: string; fit: Fit; background: string }
-  | { type: "video"; source: string; fit: Fit; background: string }
+  | {
+      type: "video";
+      source: string;
+      fit: Fit;
+      background: string;
+      /** The file `source` was re-encoded from, kept to undo it; not played. */
+      original?: string;
+    }
   | SceneContent;
 
 /** A layered scene (imported from Wallpaper Engine); edited by the engine. */
@@ -191,6 +198,57 @@ export interface WorkshopScan {
 export type SceneFps = 15 | 30;
 export const SCENE_FPS_CHOICES: SceneFps[] = [15, 30];
 
+/** Where the host decodes videos. GPU decoders fall back to software for streams they cannot play. */
+export type VideoDecoder = "auto" | "nvdec" | "vaapi" | "d3d11va" | "software";
+/** Which H.264 encoder "Optimize video" uses. Automatic tries the graphics card, then software. */
+export type VideoEncoder = "auto" | "nvenc" | "vaapi" | "software";
+export const VIDEO_ENCODER_LABELS: Record<VideoEncoder, string> = {
+  auto: "Automatic",
+  nvenc: "NVENC",
+  vaapi: "VA-API",
+  software: "Software",
+};
+
+/** Stream properties of a video file (`rinka-host video-probe`) and its size on disk. */
+export interface VideoFileInfo {
+  width: number;
+  height: number;
+  frameRate: number | null;
+  duration: number | null;
+  codec: string;
+  bytes: number;
+}
+
+/** A video project's file, and the original it was re-encoded from. */
+export interface VideoFiles {
+  current: VideoFileInfo;
+  original: VideoFileInfo | null;
+  /** Progress 0..1 of a re-encode that is running, else null. */
+  running: number | null;
+}
+
+/** Limits for "Optimize video"; null keeps the source's value. */
+export interface OptimizeOptions {
+  maxHeight: number | null;
+  maxFps: number | null;
+}
+
+export interface OptimizeResult {
+  entry: LibraryEntry;
+  /** The encoder that wrote the file. */
+  encoder: VideoEncoder;
+  droppedAudio: boolean;
+  reducedTo8Bit: boolean;
+}
+
+export const VIDEO_DECODER_LABELS: Record<VideoDecoder, string> = {
+  auto: "Automatic",
+  nvdec: "NVDEC",
+  vaapi: "VA-API",
+  d3d11va: "Direct3D 11",
+  software: "Software",
+};
+
 /** Editor settings stored in config.json. */
 export interface AppSettings {
   /** Show the tray icon; closing the window then hides it to the tray. */
@@ -200,6 +258,12 @@ export interface AppSettings {
   /** Gain of all scene sound, 0..1. */
   soundVolume: number;
   soundMuted: boolean;
+  videoDecoder: VideoDecoder;
+  /** The decoders this platform offers; not settable. */
+  videoDecoderChoices: VideoDecoder[];
+  videoEncoder: VideoEncoder;
+  /** The encoders this platform offers; not settable. */
+  videoEncoderChoices: VideoEncoder[];
 }
 
 export interface AppInfo {
@@ -234,6 +298,18 @@ export interface RinkaApi {
   /** Filesystem path of a dropped file. */
   pathForFile(file: File): string;
   onLibraryChanged(listener: (entries: LibraryEntry[]) => void): void;
+  /** The current and original file of a video project. */
+  videoFiles(id: string): Promise<VideoFiles>;
+  /**
+   * Re-encodes a video project's file smaller or at a lower frame rate. The
+   * project then plays the new file; the original stays for `restoreVideo`.
+   */
+  optimizeVideo(id: string, options: OptimizeOptions): Promise<OptimizeResult>;
+  cancelOptimize(id: string): Promise<void>;
+  /** Plays the original file again and deletes the re-encoded one. */
+  restoreVideo(id: string): Promise<LibraryEntry>;
+  /** Returns a function that stops listening. */
+  onOptimizeProgress(listener: (id: string, progress: number) => void): () => void;
 
   hostState(): Promise<HostState>;
   startHost(): Promise<HostState>;

@@ -60,6 +60,10 @@ export function checkProject(p: unknown): Project {
     HEX.test(c.background ?? "#000000")
   ) {
     content = { type: c.type, source: c.source, fit: c.fit ?? "cover", background: c.background ?? "#000000" };
+    if (c.type === "video" && content.type === "video" && c.original !== undefined) {
+      if (typeof c.original !== "string") throw new Error("invalid project content");
+      content.original = c.original;
+    }
   } else {
     throw new Error("invalid project content");
   }
@@ -266,6 +270,10 @@ export interface Config {
   /** Scene sound gain 0..1 (default 0.5) and mute; read by the host too. */
   soundVolume?: number;
   soundMuted?: boolean;
+  /** A VideoDecoder name (default "auto"); read by the host too. */
+  videoDecoder?: string;
+  /** A VideoEncoder name for "Optimize video" (default "auto"). */
+  videoEncoder?: string;
 }
 
 export class ConfigStore {

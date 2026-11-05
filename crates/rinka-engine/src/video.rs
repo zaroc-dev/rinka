@@ -1,7 +1,8 @@
 //! Video frames and YUV→RGB conversion.
 //!
 //! Hosts decode video themselves (FFmpeg natively, WebCodecs in the preview)
-//! and hand frames to the engine as planar 8-bit Y'CbCr. The engine converts
+//! and hand frames to the engine as 8-bit Y'CbCr: planar, or with Cb and Cr
+//! interleaved in one plane (NV12, as hardware decoders return it). The engine converts
 //! them in the shader, so both hosts share one conversion with an explicit
 //! matrix and range:
 //!
@@ -77,8 +78,8 @@ pub fn yuv_to_rgb(matrix: ColorMatrix, range: ColorRange) -> [[f32; 4]; 3] {
     [row(0.0, r_cr), row(g_cb, g_cr), row(b_cb, 0.0)]
 }
 
-/// One planar 8-bit Y'CbCr frame (4:2:0, 4:2:2 or 4:4:4), borrowed from
-/// the decoder.
+/// One 8-bit Y'CbCr frame (4:2:0, 4:2:2 or 4:4:4), borrowed from the
+/// decoder.
 pub struct YuvFrame<'a> {
     /// Luma size.
     pub width: u32,
@@ -92,6 +93,9 @@ pub struct YuvFrame<'a> {
     pub u_stride: u32,
     pub v: &'a [u8],
     pub v_stride: u32,
+    /// `u` holds Cb and Cr interleaved, two bytes per chroma sample (NV12
+    /// for 4:2:0); `v` is unused.
+    pub interleaved: bool,
     pub matrix: ColorMatrix,
     pub range: ColorRange,
 }

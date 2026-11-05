@@ -3,9 +3,10 @@ import type { Fit, HostState, LibraryEntry, OutputInfo, Project } from "../share
 import { FITS } from "../shared/api";
 import { DisplayMap } from "./displays";
 import { AdjustPanel } from "./adjust";
-import { CloseIcon, InfoIcon, PauseIcon, PlayIcon, SlidersIcon, TrashIcon } from "./icons";
+import { CloseIcon, FilmIcon, InfoIcon, PauseIcon, PlayIcon, SlidersIcon, TrashIcon } from "./icons";
+import { VideoFilePanel } from "./video-file";
 import { ReportView } from "./import";
-import type { ImportReport } from "../shared/api";
+import type { AppSettings, ImportReport } from "../shared/api";
 import {
   canvas,
   onPreviewLoading,
@@ -22,7 +23,7 @@ import {
   updateProject,
   type VideoState,
 } from "./preview";
-import { api, clock, errorMessage, FIT_HINTS, FIT_LABELS, outputPixels } from "./util";
+import { api, clock, errorMessage, FIT_HINTS, FIT_LABELS, outputPixels, useDismiss } from "./util";
 
 interface Props {
   entry: LibraryEntry;
@@ -39,6 +40,8 @@ export function Wallpaper({ entry, entries, outputs, host, onEdited, onDelete, o
   const [project, setProject] = useState<Project>(entry.project);
   const [applyOpen, setApplyOpen] = useState(false);
   const [adjustOpen, setAdjustOpen] = useState(false);
+  const [fileOpen, setFileOpen] = useState(false);
+  const [settings, setSettings] = useState<AppSettings | null>(null);
   const [moves, setMoves] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [status, setStatus] = useState(previewStatus());
@@ -55,6 +58,9 @@ export function Wallpaper({ entry, entries, outputs, host, onEdited, onDelete, o
   const referenceHeight = reference ? Math.min(reference[0], reference[1]) : 1080;
 
   useEffect(() => onPreviewStatus(setStatus), []);
+  useEffect(() => {
+    if (fileOpen) void api.appSettings().then(setSettings);
+  }, [fileOpen]);
   useEffect(() => onPreviewLoading(setLoading), []);
   const [video, setVideo] = useState<VideoState | null>(null);
   const [showOriginal, setShowOriginal] = useState(false);
@@ -74,6 +80,19 @@ export function Wallpaper({ entry, entries, outputs, host, onEdited, onDelete, o
     setApplyOpen(false);
     setAdjustOpen(false);
   }, [entry.id, entry.assetPrefix]);
+  useEffect(() => setFileOpen(false), [entry.id]);
+  // Popovers close on a press outside them; their toggle buttons
+  // (aria-expanded) close them on their own.
+  useDismiss(
+    applyOpen || adjustOpen || fileOpen || report !== null,
+    () => {
+      setApplyOpen(false);
+      setAdjustOpen(false);
+      setFileOpen(false);
+      setReport(null);
+    },
+    (target) => target.closest(".popover, [aria-expanded]") !== null,
+  );
 
   // Loads the preview. Native video color metadata can arrive after the
   // thumbnail worker finishes; reopen the preview when it becomes known.
@@ -193,7 +212,7 @@ export function Wallpaper({ entry, entries, outputs, host, onEdited, onDelete, o
                   class="icon-button"
                   aria-label="Import report"
                   title="Import report"
-                  aria-pressed={report !== null}
+                  aria-expanded={report !== null}
                   onClick={() => {
                     if (report) return setReport(null);
                     setApplyOpen(false);
@@ -270,6 +289,23 @@ export function Wallpaper({ entry, entries, outputs, host, onEdited, onDelete, o
             </>
           )}
         </div>
+        {c.type === "video" && (
+          <button
+            type="button"
+            class="icon-button"
+            aria-label="Video file"
+            title="Video file: size, frame rate and re-encoding"
+            aria-expanded={fileOpen}
+            onClick={() => {
+              setReport(null);
+              setApplyOpen(false);
+              setAdjustOpen(false);
+              setFileOpen((v) => !v);
+            }}
+          >
+            <FilmIcon />
+          </button>
+        )}
         {c.type !== "color" && (
           <button
             type="button"
@@ -280,6 +316,7 @@ export function Wallpaper({ entry, entries, outputs, host, onEdited, onDelete, o
             onClick={() => {
               setReport(null);
               setApplyOpen(false);
+              setFileOpen(false);
               setAdjustOpen((v) => !v);
             }}
           >
@@ -304,6 +341,7 @@ export function Wallpaper({ entry, entries, outputs, host, onEdited, onDelete, o
           onClick={() => {
             setReport(null);
             setAdjustOpen(false);
+            setFileOpen(false);
             setApplyOpen((v) => !v);
           }}
         >
@@ -323,6 +361,16 @@ export function Wallpaper({ entry, entries, outputs, host, onEdited, onDelete, o
         {adjustOpen && (
           <div class="popover" role="dialog" aria-label="Speed and colors">
             <AdjustPanel project={project} moves={moves} onChange={(next) => edit(() => next)} />
+          </div>
+        )}
+        {fileOpen && (
+          <div class="popover" role="dialog" aria-label="Video file">
+            <VideoFilePanel
+              entry={entry}
+              displayHeight={referenceHeight}
+              encoder={settings?.videoEncoder ?? "auto"}
+              onChanged={(next) => onEdited(next.id, next.project)}
+            />
           </div>
         )}
         {applyOpen && (

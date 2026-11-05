@@ -1,6 +1,31 @@
+import { useEffect } from "preact/hooks";
 import type { Fit, LibraryEntry, OutputInfo } from "../shared/api";
 
 export const api = window.rinka;
+
+/**
+ * Closes an open popover or menu on a press outside it, or on Escape.
+ * `inside` tells which elements count as part of it; include the button
+ * that toggles it, or that button's own click would reopen it.
+ */
+export function useDismiss(open: boolean, close: () => void, inside: (target: Element) => boolean): void {
+  useEffect(() => {
+    if (!open) return;
+    const onPointer = (e: PointerEvent) => {
+      if (e.target instanceof Element && !inside(e.target)) close();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") close();
+    };
+    // Capture: a press that stops propagation still closes it.
+    document.addEventListener("pointerdown", onPointer, true);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onPointer, true);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+}
 
 export const FIT_LABELS: Record<Fit, string> = {
   cover: "Fill",

@@ -344,15 +344,22 @@ fn downscaled_texture_keeps_placement() {
 fn yuv_frames_convert_with_their_matrix_and_range() {
     let Some(g) = gpu() else { return };
     // #1e6f73 encoded as BT.709 limited range is Y=97 Cb=138 Cr=92; the
-    // same color in BT.601 full range is Y=86 Cb=145 Cr=88.
-    for (matrix, range, (y, u, v)) in [
+    // same color in BT.601 full range is Y=86 Cb=145 Cr=88. Each is checked
+    // with planar chroma and with interleaved (NV12, hardware decoders).
+    for (matrix, range, (y, u, v), interleaved) in [
         (ColorMatrix::Bt709, ColorRange::Limited, (97u8, 138u8, 92u8)),
         (ColorMatrix::Bt601, ColorRange::Full, (86, 145, 88)),
-    ] {
+    ]
+    .into_iter()
+    .flat_map(|(m, r, c)| [(m, r, c, false), (m, r, c, true)])
+    {
         let (w, h) = (4u32, 4u32);
         let luma = vec![y; (w * h) as usize];
-        let cb = vec![u; 4];
-        let cr = vec![v; 4];
+        let (cb, cr, u_stride) = if interleaved {
+            ([u, v].repeat(4), Vec::new(), 4)
+        } else {
+            (vec![u; 4], vec![v; 4], 2)
+        };
         let frame = YuvFrame {
             chroma_width: 2,
             chroma_height: 2,
@@ -361,9 +368,10 @@ fn yuv_frames_convert_with_their_matrix_and_range() {
             y: &luma,
             y_stride: w,
             u: &cb,
-            u_stride: 2,
+            u_stride,
             v: &cr,
             v_stride: 2,
+            interleaved,
             matrix,
             range,
         };
@@ -374,6 +382,7 @@ fn yuv_frames_convert_with_their_matrix_and_range() {
             source: "assets/v.mp4".into(),
             fit: Fit::Stretch,
             background: Srgb8::BLACK,
+            original: None,
         };
         let mut target = g
             .renderer
@@ -389,7 +398,7 @@ fn yuv_frames_convert_with_their_matrix_and_range() {
         for px in pixels.as_chunks::<4>().0 {
             let ok =
                 px[0].abs_diff(30) <= 2 && px[1].abs_diff(111) <= 2 && px[2].abs_diff(115) <= 2;
-            assert!(ok, "{matrix:?} {range:?}: {px:?}");
+            assert!(ok, "{matrix:?} {range:?} interleaved={interleaved}: {px:?}");
         }
     }
 }

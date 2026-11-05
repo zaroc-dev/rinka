@@ -30,6 +30,8 @@ mod restore;
 #[cfg(any(target_os = "linux", windows))]
 mod settings;
 #[cfg(any(target_os = "linux", windows))]
+mod transcode;
+#[cfg(any(target_os = "linux", windows))]
 mod video;
 #[cfg(target_os = "linux")]
 mod wayland;
@@ -105,6 +107,32 @@ enum Cmd {
         file: PathBuf,
         #[arg(long, default_value_t = 3.0)]
         seconds: f64,
+        /// auto, nvdec, vaapi, d3d11va or software.
+        #[arg(long, default_value = "auto")]
+        decoder: String,
+    },
+    /// Print a video's stream properties (size, frame rate, duration,
+    /// codec) as JSON.
+    #[cfg(any(target_os = "linux", windows))]
+    VideoProbe { file: PathBuf },
+    /// Re-encode a video to H.264 MP4, smaller or at a lower frame rate.
+    ///
+    /// Prints `{"progress": F}` lines while it runs, then the result as
+    /// JSON. The output is written in place; callers write to a temporary
+    /// name and move it.
+    #[cfg(any(target_os = "linux", windows))]
+    Transcode {
+        input: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+        /// Scale down to at most this many lines.
+        #[arg(long)]
+        max_height: Option<u32>,
+        /// Drop frames down to at most this rate.
+        #[arg(long)]
+        max_fps: Option<f64>,
+        #[arg(long, value_enum, default_value = "auto")]
+        encoder: transcode::VideoEncoder,
     },
     /// Play a scene project's sound layers without showing it (development
     /// aid for checking sound output).
@@ -154,7 +182,35 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         #[cfg(any(target_os = "linux", windows))]
-        Cmd::VideoTiming { file, seconds } => video_timing(&file, seconds),
+        Cmd::VideoProbe { file } => {
+            println!("{}", serde_json::to_string(&video::probe(&file)?)?);
+            Ok(())
+        }
+        #[cfg(any(target_os = "linux", windows))]
+        Cmd::Transcode {
+            input,
+            out,
+            max_height,
+            max_fps,
+            encoder,
+        } => {
+            let options = transcode::Options {
+                max_height,
+                max_fps,
+                encoder,
+            };
+            let outcome = transcode::transcode(&input, &out, options, |p| {
+                println!("{}", serde_json::json!({ "progress": p }));
+            })?;
+            println!("{}", serde_json::to_string(&outcome)?);
+            Ok(())
+        }
+        #[cfg(any(target_os = "linux", windows))]
+        Cmd::VideoTiming {
+            file,
+            seconds,
+            decoder,
+        } => video_timing(&file, seconds, &decoder),
         #[cfg(any(target_os = "linux", windows))]
         Cmd::SoundCheck {
             project,
@@ -220,8 +276,19 @@ fn info() -> anyhow::Result<()> {
 }
 
 #[cfg(any(target_os = "linux", windows))]
-fn video_timing(file: &std::path::Path, seconds: f64) -> anyhow::Result<()> {
+fn video_timing(file: &std::path::Path, seconds: f64, decoder: &str) -> anyhow::Result<()> {
     use std::time::{Duration, Instant};
+    let mut settings = settings::HostSettings::default();
+    settings
+        .apply(settings::SettingsPatch {
+            video_decoder: Some(
+                serde_json::from_value(serde_json::Value::from(decoder))
+                    .with_context(|| format!("unknown decoder {decoder}"))?,
+            ),
+            ..Default::default()
+        })
+        .map_err(|e| anyhow::anyhow!(e.message))?;
+    video::set_decoder(settings.video_decoder);
     let mut player = video::Player::open(file)?;
     println!("{}", serde_json::to_string(&player.info)?);
     let start = Instant::now();
@@ -253,7 +320,10 @@ fn video_timing(file: &std::path::Path, seconds: f64) -> anyhow::Result<()> {
             "the decoder stopped after {shown} frames"
         );
     }
-    println!("frames {shown}, worst timing error {worst:.1} ms");
+    println!(
+        "frames {shown}, worst timing error {worst:.1} ms, decoder {}",
+        player.decoder().map_or("unknown", |d| d.name())
+    );
     Ok(())
 }
 

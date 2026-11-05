@@ -22,6 +22,15 @@ const api: RinkaApi = {
   onLibraryChanged: (listener) => {
     ipcRenderer.on("library:changed", (_event, entries: LibraryEntry[]) => listener(entries));
   },
+  videoFiles: (id) => ipcRenderer.invoke("video:files", id),
+  optimizeVideo: (id, options) => ipcRenderer.invoke("video:optimize", id, options),
+  cancelOptimize: (id) => ipcRenderer.invoke("video:cancel", id),
+  restoreVideo: (id) => ipcRenderer.invoke("video:restore", id),
+  onOptimizeProgress: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, id: string, progress: number) => listener(id, progress);
+    ipcRenderer.on("video:progress", handler);
+    return () => void ipcRenderer.removeListener("video:progress", handler);
+  },
 
   hostState: () => ipcRenderer.invoke("host:state"),
   startHost: () => ipcRenderer.invoke("host:start"),

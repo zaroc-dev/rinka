@@ -1,11 +1,11 @@
 import { render } from "preact";
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import type { AppInfo, AppSettings, HostState, LibraryEntry, OutputInfo, Project, RinkaApi } from "../shared/api";
-import { SCENE_FPS_CHOICES } from "../shared/api";
+import { SCENE_FPS_CHOICES, VIDEO_DECODER_LABELS, VIDEO_ENCODER_LABELS } from "../shared/api";
 import { BackIcon, CloseIcon, GearIcon, ImportIcon, PlusIcon, SearchIcon } from "./icons";
 import { type Filter, Library, SORTS, type Sort, VIEW_MODES, type ViewMode } from "./library";
 import { onPreviewStatus, previewStatus, setPreviewFps, setPreviewSound, startPreview } from "./preview";
-import { api, errorMessage, outputPixels, readPref, resolution, writePref } from "./util";
+import { api, errorMessage, outputPixels, readPref, resolution, useDismiss, writePref } from "./util";
 import { Wallpaper } from "./wallpaper";
 import { ImportView } from "./import";
 
@@ -36,6 +36,7 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [importing, setImporting] = useState(false);
   const [newOpen, setNewOpen] = useState(false);
+  useDismiss(newOpen, () => setNewOpen(false), (target) => target.closest(".menu-anchor") !== null);
   const [dropping, setDropping] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -416,6 +417,53 @@ function Settings({ host, outputs, onClose }: { host: HostState; outputs: Output
                   }
                 >
                   {fps} fps
+                </button>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section class="sheet-section">
+          <h3>Video</h3>
+          <div class="setting-row stacked">
+            <span>
+              Decoding
+              <span class="muted small">
+                Automatic decodes on the graphics card when it can. A video the chosen decoder cannot play is
+                decoded in software. Playing videos reopen when you change this.
+              </span>
+            </span>
+            <div class="segmented fit" role="radiogroup" aria-label="Video decoding">
+              {(settings?.videoDecoderChoices ?? ["auto"]).map((decoder) => (
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={settings?.videoDecoder === decoder}
+                  disabled={!settings}
+                  onClick={() => void api.setAppSettings({ videoDecoder: decoder }).then(setSettings)}
+                >
+                  {VIDEO_DECODER_LABELS[decoder]}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div class="setting-row stacked">
+            <span>
+              Encoding
+              <span class="muted small">
+                Used when you optimize a video. Automatic encodes on the graphics card when it can, otherwise in software.
+              </span>
+            </span>
+            <div class="segmented fit" role="radiogroup" aria-label="Video encoding">
+              {(settings?.videoEncoderChoices ?? ["auto"]).map((encoder) => (
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={settings?.videoEncoder === encoder}
+                  disabled={!settings}
+                  onClick={() => void api.setAppSettings({ videoEncoder: encoder }).then(setSettings)}
+                >
+                  {VIDEO_ENCODER_LABELS[encoder]}
                 </button>
               ))}
             </div>

@@ -254,10 +254,12 @@ fn vs_full(@builtin(vertex_index) i: u32) -> VsOut {
 
 @fragment
 fn fs_video(in: VsOut) -> @location(0) vec4<f32> {
+    // Interleaved chroma: an RG plane and a zero V plane (see VideoTexture).
+    let u = textureSampleLevel(plane_u, plane_sampler, in.uv, 0.0);
     let yuv = vec4<f32>(
         textureSampleLevel(plane_y, plane_sampler, in.uv, 0.0).r,
-        textureSampleLevel(plane_u, plane_sampler, in.uv, 0.0).r,
-        textureSampleLevel(plane_v, plane_sampler, in.uv, 0.0).r,
+        u.r,
+        u.g + textureSampleLevel(plane_v, plane_sampler, in.uv, 0.0).r,
         1.0,
     );
     let rgb = vec3<f32>(dot(m.r, yuv), dot(m.g, yuv), dot(m.b, yuv));
