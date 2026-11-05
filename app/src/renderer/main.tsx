@@ -59,8 +59,15 @@ function App() {
   useEffect(() => {
     void api.listProjects().then(setEntries);
     api.onLibraryChanged((next) =>
-      // Keep in-flight edits of the open wallpaper; saves arrive shortly.
-      setEntries((prev) => next.map((n) => ({ ...n, project: prev.find((p) => p.id === n.id)?.project ?? n.project }))),
+      // Keep in-flight edits of the open wallpaper; saves arrive shortly. A new
+      // asset revision means the main process rewrote the project (optimize,
+      // restore): an edit from before it would point at the old file.
+      setEntries((prev) =>
+        next.map((n) => {
+          const old = prev.find((p) => p.id === n.id);
+          return old && old.assetPrefix === n.assetPrefix ? { ...n, project: old.project } : n;
+        }),
+      ),
     );
     void api.hostState().then(setHost);
     api.onHostState(setHost);

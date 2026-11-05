@@ -32,6 +32,15 @@ something costs more than a few minutes.
   crate, update the two hashes in `flake.nix` (set them to `lib.fakeHash`,
   build, copy the reported hash).
 
+## Editor
+
+- **The editor's draft can outlive a rewrite by the main process.** The
+  library refresh kept each open project's in-flight edits, so after
+  Optimize video the draft still pointed at the original; the next placement
+  or color edit saved it and the wallpaper went back to the 4K file. Drafts
+  are kept only while the asset revision is unchanged, and `library:save`
+  takes a video's `source`/`original` from disk.
+
 ## WebGPU in Electron
 
 - **The GPU sandbox hides the Vulkan drivers.** Chromium's GPU process can't
