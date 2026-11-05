@@ -30,7 +30,7 @@ win:
       to: rinka-host.exe
     - from: ../target/release
       to: .
-      filter: ["avcodec-*.dll", "avformat-*.dll", "avutil-*.dll", "swscale-*.dll", "swresample-*.dll"]
+      filter: ["avcodec-*.dll", "avformat-*.dll", "avfilter-*.dll", "avutil-*.dll", "swscale-*.dll", "swresample-*.dll"]
     - from: ../target/windows-tools/ffmpeg-9.0.2-full_build-shared/LICENSE
       to: licenses/ffmpeg/LICENSE
     - from: ../target/windows-tools/ffmpeg-9.0.2-full_build-shared/README.txt

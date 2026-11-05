@@ -1329,3 +1329,37 @@ h1 {
   width: 160px;
   accent-color: var(--primary);
 }
+
+/* ---- video file popover ----------------------------------------------------- */
+
+.video-file {
+  display: grid;
+  gap: 12px;
+  width: 400px;
+}
+.video-file h2 {
+  margin: 0;
+  font-size: var(--text-md);
+}
+.video-file p {
+  margin: 0;
+}
+.video-file .facts {
+  grid-template-columns: 64px minmax(0, 1fr);
+}
+.video-file > .button {
+  justify-self: end;
+}
+.video-file .error {
+  color: var(--danger);
+}
+.optimize-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.optimize-progress progress {
+  flex: 1;
+  height: 6px;
+  accent-color: var(--primary);
+}

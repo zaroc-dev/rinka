@@ -91,6 +91,27 @@ Unverified: VA-API on Intel or AMD hardware (only through NVIDIA's
 translation driver here), D3D11VA on Windows, and 10-bit streams on the GPU
 (P010 goes through swscale to 8-bit).
 
+## Optimize video (2026-11-05)
+
+The editor's video file popover re-encodes a video project smaller or at
+a lower frame rate (`rinka-host transcode`). Resolution offers the
+standard heights below the source's (default: the smallest one that still
+covers the largest display). Frame rate offers 60 and 30 below the
+source's. The output is H.264 MP4 with the source's resolved matrix and
+range; the original stays in the project.
+
+| Check | Result |
+| --- | --- |
+| Colors | `software_keeps_colors_and_their_reading`: full-range BT.601 stays full-range BT.601; untagged 720-line input scaled to 360 lines is tagged BT.709. `gpu_encoders_keep_colors`: NVENC keeps the constant fixture codes within 2. |
+| Frame rate | `frame_rate_caps_drop_frames_evenly`: 30 → 15 fps gives 18 of 36 frames and a 15 fps container rate; a cap above the source changes nothing. |
+| Real file | 3870×2160 120 fps (33.8 MB) → 1936×1080 60 fps: NVENC in 5.2 s (10.6 MB), x264 in 7.6 s (5.8 MB). Playback: 0.40 → 0.12 cores with NVDEC, 2.2 → 0.5 in software. |
+| Editor | Smoke runs on a generated 1440p60 video: optimize (progress 0 → 100%, project points at the copy, original kept), re-optimize to 720p30 (starts from the original, previous copy deleted), restore (copy deleted, `original` gone), cancel (no `.part` left, project unchanged). |
+| Host | `reload` of an assigned project switches to the re-encoded file. |
+
+Unverified: VA-API encoding (NVIDIA's VA-API driver only decodes; the
+pipeline reaches the encoder, where it fails like the FFmpeg CLI does) and
+NVENC on Windows. Scene video textures cannot be optimized yet.
+
 ## Open
 
 - Zero-copy upload: frames go GPU → memory → GPU. Sharing them would need

@@ -25,6 +25,8 @@ export function generateFixtures() {
   encode("bt601-full-444.avi", `nullsrc=s=64x64:r=25,format=yuv444p,geq=lum=97:cb=138:cr=90,setparams=colorspace=smpte170m:range=full`, ["-c:v", "mjpeg", "-q:v", "1", "-pix_fmt", "yuvj444p", "-colorspace", "smpte170m", "-color_range", "pc"]);
   encode("untagged-sd.mkv", constant("64x64"), ["-c:v", "ffv1", "-pix_fmt", "yuv420p"]);
   encode("untagged-hd.mkv", constant("64x720"), ["-c:v", "ffv1", "-pix_fmt", "yuv420p"]);
+  // Large enough for GPU encoders' minimum sizes.
+  encode("teal-720p.mkv", constant("1280x720") + ",setparams=colorspace=bt709:range=limited", ["-c:v", "ffv1", "-pix_fmt", "yuv420p", "-colorspace", "bt709", "-color_range", "tv"]);
   encode("vfr.mkv", constant("64x64"), ["-vf", "select='eq(mod(n,5),0)+eq(mod(n,5),1)'", "-fps_mode", "vfr", "-c:v", "ffv1", "-pix_fmt", "yuv420p"]);
   encode("bframes.mp4", "testsrc2=s=320x180:r=30", ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-bf", "3", "-g", "30", "-colorspace", "bt709", "-color_range", "tv"]);
   encode("preview-full.mp4", constant("64x64") + ",setparams=colorspace=smpte170m:range=full", ["-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p", "-colorspace", "smpte170m", "-color_range", "pc"]);

@@ -2,14 +2,15 @@
 
 import { app, BrowserWindow, dialog, ipcMain, Menu, net, protocol, shell } from "electron";
 import { randomUUID } from "node:crypto";
-import { createReadStream, existsSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { createReadStream, existsSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { Readable } from "node:stream";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { SCENE_FPS_CHOICES } from "../shared/api";
-import type { AppSettings, HostState, SceneFps, VideoDecoder, ImportResult, LibraryEntry, OutputInfo, PreviewReport, Project } from "../shared/api";
+import type { AppSettings, HostState, SceneFps, VideoDecoder, VideoEncoder, VideoFiles, OptimizeOptions, OptimizeResult, ImportResult, LibraryEntry, OutputInfo, PreviewReport, Project } from "../shared/api";
 import { connectOrSpawn, defaultSocketPath, findHostBinary, type HostConnection } from "./host";
 import { ConfigStore, IMPORT_EXTENSIONS, Library, type StoredEntry } from "./library";
+import { optimizedName, VideoOptimizer } from "./optimize";
 import { Thumbnails } from "./thumbnails";
 import { AppTray } from "./tray";
 import { Workshop, workshopFolder } from "./workshop";
@@ -71,6 +72,7 @@ let library: Library;
 let config: ConfigStore;
 let thumbnails: Thumbnails;
 let workshop: Workshop;
+let optimizer: VideoOptimizer;
 let window: BrowserWindow | null = null;
 let host: HostConnection | null = null;
 let hostState: HostState = { state: "stopped" };
@@ -107,6 +109,15 @@ function toEntry(e: StoredEntry): LibraryEntry {
 
 function listEntries(): LibraryEntry[] {
   return library.list().map(toEntry);
+}
+
+/** A video project now plays another file: refresh what shows it. */
+async function afterVideoChange(id: string): Promise<void> {
+  refreshThumbnails();
+  libraryChanged();
+  if (host && Object.values(config.config.assignments).includes(id)) {
+    await host.request("reload", { project: library.dir(id) }).catch((e: Error) => console.warn("reload:", e.message));
+  }
 }
 
 function libraryChanged(): void {
@@ -257,6 +268,58 @@ function registerIpc(): void {
       await host.request("reload", { project: library.dir(id) });
     }
   });
+  ipcMain.handle("video:files", async (_e, id: string): Promise<VideoFiles> => {
+    const entry = library.get(id);
+    const c = entry.project.content;
+    if (c.type !== "video") throw new Error("not a video wallpaper");
+    const original = c.original ? path.join(entry.dir, c.original) : null;
+    return {
+      current: await optimizer.probe(path.join(entry.dir, c.source)),
+      original: original ? await optimizer.probe(original).catch(() => null) : null,
+      running: optimizer.progress(id),
+    };
+  });
+  ipcMain.handle("video:optimize", async (_e, id: string, options: OptimizeOptions): Promise<OptimizeResult> => {
+    const before = library.get(id);
+    const c = before.project.content;
+    if (c.type !== "video") throw new Error("not a video wallpaper");
+    // Always encode from the original, never from an earlier re-encode.
+    const original = c.original ?? c.source;
+    const input = path.join(before.dir, original);
+    const source = await optimizer.probe(input);
+    const height = options.maxHeight && options.maxHeight < source.height ? options.maxHeight : source.height;
+    const fps = options.maxFps && source.frameRate && options.maxFps < source.frameRate - 0.01 ? options.maxFps : null;
+    const name = optimizedName(before.dir, original, height, fps);
+    const outcome = await optimizer.transcode(id, input, path.join(before.dir, name), options, appSettings().videoEncoder, (p) =>
+      window?.webContents.send("video:progress", id, p),
+    );
+    // Re-read: the project may have been edited while it encoded.
+    const now = library.get(id);
+    const content = now.project.content;
+    if (content.type !== "video") throw new Error("the wallpaper changed while its video was optimized");
+    const previous = content.source;
+    library.save(id, { ...now.project, content: { ...content, source: name, original } });
+    if (previous !== original && previous !== name) rmSync(path.join(now.dir, previous), { force: true });
+    await afterVideoChange(id);
+    return {
+      entry: toEntry(library.get(id)),
+      encoder: outcome.encoder,
+      droppedAudio: outcome.dropped_audio,
+      reducedTo8Bit: outcome.reduced_to_8_bit,
+    };
+  });
+  ipcMain.handle("video:cancel", (_e, id: string) => optimizer.cancel(id));
+  ipcMain.handle("video:restore", async (_e, id: string): Promise<LibraryEntry> => {
+    const entry = library.get(id);
+    const c = entry.project.content;
+    if (c.type !== "video" || !c.original) throw new Error("this video has no original to restore");
+    if (!existsSync(path.join(entry.dir, c.original))) throw new Error("the original file is missing");
+    const { original, ...rest } = c;
+    library.save(id, { ...entry.project, content: { ...rest, source: original } });
+    if (c.source !== original) rmSync(path.join(entry.dir, c.source), { force: true });
+    await afterVideoChange(id);
+    return toEntry(library.get(id));
+  });
   ipcMain.handle("library:delete", async (_e, id: string) => {
     for (const [output, assigned] of Object.entries(config.config.assignments)) {
       if (assigned !== id) continue;
@@ -316,6 +379,9 @@ function registerIpc(): void {
     if (typeof patch.soundMuted === "boolean") config.config.soundMuted = patch.soundMuted;
     if (patch.videoDecoder !== undefined && VIDEO_DECODER_CHOICES.includes(patch.videoDecoder)) {
       config.config.videoDecoder = patch.videoDecoder;
+    }
+    if (patch.videoEncoder !== undefined && VIDEO_ENCODER_CHOICES.includes(patch.videoEncoder)) {
+      config.config.videoEncoder = patch.videoEncoder;
     }
     config.save();
     updateTray();
@@ -466,11 +532,15 @@ function showWindow(): void {
 /** The host's decoders on this platform (see settings.rs). */
 const VIDEO_DECODER_CHOICES: VideoDecoder[] =
   process.platform === "win32" ? ["auto", "d3d11va", "software"] : ["auto", "nvdec", "vaapi", "software"];
+/** The host's encoders on this platform (see transcode.rs). */
+const VIDEO_ENCODER_CHOICES: VideoEncoder[] =
+  process.platform === "win32" ? ["auto", "nvenc", "software"] : ["auto", "nvenc", "vaapi", "software"];
 
 function appSettings(): AppSettings {
   const fps = config.config.sceneFps as SceneFps;
   const volume = config.config.soundVolume;
   const decoder = config.config.videoDecoder as VideoDecoder;
+  const encoder = config.config.videoEncoder as VideoEncoder;
   return {
     trayIcon: config.config.trayIcon !== false,
     sceneFps: SCENE_FPS_CHOICES.includes(fps) ? fps : 30,
@@ -478,6 +548,8 @@ function appSettings(): AppSettings {
     soundMuted: config.config.soundMuted === true,
     videoDecoder: VIDEO_DECODER_CHOICES.includes(decoder) ? decoder : "auto",
     videoDecoderChoices: VIDEO_DECODER_CHOICES,
+    videoEncoder: VIDEO_ENCODER_CHOICES.includes(encoder) ? encoder : "auto",
+    videoEncoderChoices: VIDEO_ENCODER_CHOICES,
   };
 }
 
@@ -578,12 +650,16 @@ app.on("second-instance", (_event, argv) => {
   showWindow();
 });
 
-app.on("before-quit", () => (quitting = true));
+app.on("before-quit", () => {
+  quitting = true;
+  optimizer?.cancelAll();
+});
 
 app.whenReady().then(() => {
   if (!primary) return;
   library = new Library(path.join(app.getPath("userData"), "projects"));
   config = new ConfigStore(path.join(app.getPath("userData"), "config.json"));
+  optimizer = new VideoOptimizer(hostBinary);
   thumbnails = new Thumbnails(path.join(app.getPath("userData"), "cache", "thumbnails"), hostBinary, libraryChanged);
   workshop = new Workshop(
     hostBinary,

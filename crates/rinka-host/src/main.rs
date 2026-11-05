@@ -30,6 +30,8 @@ mod restore;
 #[cfg(any(target_os = "linux", windows))]
 mod settings;
 #[cfg(any(target_os = "linux", windows))]
+mod transcode;
+#[cfg(any(target_os = "linux", windows))]
 mod video;
 #[cfg(target_os = "linux")]
 mod wayland;
@@ -109,6 +111,29 @@ enum Cmd {
         #[arg(long, default_value = "auto")]
         decoder: String,
     },
+    /// Print a video's stream properties (size, frame rate, duration,
+    /// codec) as JSON.
+    #[cfg(any(target_os = "linux", windows))]
+    VideoProbe { file: PathBuf },
+    /// Re-encode a video to H.264 MP4, smaller or at a lower frame rate.
+    ///
+    /// Prints `{"progress": F}` lines while it runs, then the result as
+    /// JSON. The output is written in place; callers write to a temporary
+    /// name and move it.
+    #[cfg(any(target_os = "linux", windows))]
+    Transcode {
+        input: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+        /// Scale down to at most this many lines.
+        #[arg(long)]
+        max_height: Option<u32>,
+        /// Drop frames down to at most this rate.
+        #[arg(long)]
+        max_fps: Option<f64>,
+        #[arg(long, value_enum, default_value = "auto")]
+        encoder: transcode::VideoEncoder,
+    },
     /// Play a scene project's sound layers without showing it (development
     /// aid for checking sound output).
     #[cfg(any(target_os = "linux", windows))]
@@ -154,6 +179,30 @@ fn main() -> anyhow::Result<()> {
             };
             let report = rinka_import::import(&item, out.as_deref(), &options)?;
             println!("{}", serde_json::to_string_pretty(&report)?);
+            Ok(())
+        }
+        #[cfg(any(target_os = "linux", windows))]
+        Cmd::VideoProbe { file } => {
+            println!("{}", serde_json::to_string(&video::probe(&file)?)?);
+            Ok(())
+        }
+        #[cfg(any(target_os = "linux", windows))]
+        Cmd::Transcode {
+            input,
+            out,
+            max_height,
+            max_fps,
+            encoder,
+        } => {
+            let options = transcode::Options {
+                max_height,
+                max_fps,
+                encoder,
+            };
+            let outcome = transcode::transcode(&input, &out, options, |p| {
+                println!("{}", serde_json::json!({ "progress": p }));
+            })?;
+            println!("{}", serde_json::to_string(&outcome)?);
             Ok(())
         }
         #[cfg(any(target_os = "linux", windows))]

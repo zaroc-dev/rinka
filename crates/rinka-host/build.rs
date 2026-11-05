@@ -33,6 +33,7 @@ fn copy_video_runtime() {
             || ![
                 "avcodec-",
                 "avformat-",
+                "avfilter-",
                 "avutil-",
                 "swscale-",
                 "swresample-",

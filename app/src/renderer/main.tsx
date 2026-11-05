@@ -1,7 +1,7 @@
 import { render } from "preact";
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import type { AppInfo, AppSettings, HostState, LibraryEntry, OutputInfo, Project, RinkaApi } from "../shared/api";
-import { SCENE_FPS_CHOICES, VIDEO_DECODER_LABELS } from "../shared/api";
+import { SCENE_FPS_CHOICES, VIDEO_DECODER_LABELS, VIDEO_ENCODER_LABELS } from "../shared/api";
 import { BackIcon, CloseIcon, GearIcon, ImportIcon, PlusIcon, SearchIcon } from "./icons";
 import { type Filter, Library, SORTS, type Sort, VIEW_MODES, type ViewMode } from "./library";
 import { onPreviewStatus, previewStatus, setPreviewFps, setPreviewSound, startPreview } from "./preview";
@@ -442,6 +442,27 @@ function Settings({ host, outputs, onClose }: { host: HostState; outputs: Output
                   onClick={() => void api.setAppSettings({ videoDecoder: decoder }).then(setSettings)}
                 >
                   {VIDEO_DECODER_LABELS[decoder]}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div class="setting-row stacked">
+            <span>
+              Encoding
+              <span class="muted small">
+                Used when you optimize a video. Automatic encodes on the graphics card when it can, otherwise in software.
+              </span>
+            </span>
+            <div class="segmented fit" role="radiogroup" aria-label="Video encoding">
+              {(settings?.videoEncoderChoices ?? ["auto"]).map((encoder) => (
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={settings?.videoEncoder === encoder}
+                  disabled={!settings}
+                  onClick={() => void api.setAppSettings({ videoEncoder: encoder }).then(setSettings)}
+                >
+                  {VIDEO_ENCODER_LABELS[encoder]}
                 </button>
               ))}
             </div>

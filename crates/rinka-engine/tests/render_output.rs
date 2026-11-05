@@ -382,6 +382,7 @@ fn yuv_frames_convert_with_their_matrix_and_range() {
             source: "assets/v.mp4".into(),
             fit: Fit::Stretch,
             background: Srgb8::BLACK,
+            original: None,
         };
         let mut target = g
             .renderer

@@ -120,7 +120,10 @@ scenes each.
   images). The Windows host renders off the window thread but still decodes
   on its render thread.
 - Hardware video decode: VA-API on Intel/AMD and D3D11VA on Windows are
-  untested; frames still round-trip through memory. MKV/WebM in the preview
+  untested; frames still round-trip through memory.
+- Optimize video: VA-API encoding is untested (needs Intel/AMD); scene
+  video textures cannot be optimized yet; AMF/Quick Sync on Windows are not
+  offered. MKV/WebM in the preview
   (WebCodecs needs a demuxer); HDR and 10-bit video.
 - Asset content hashes in the project manifest.
 - CI builds only on version tags (`.github/workflows/release.yml`); no build

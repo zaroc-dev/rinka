@@ -27,7 +27,7 @@ wayland-backend = { version = "0.3", features = ["client_system"] }
 
 [target.'cfg(any(target_os = "linux", windows))'.dependencies]
 # The same software decoder on both hosts; RGB conversion stays in the engine.
-ffmpeg-next = { version = "9", default-features = false, features = ["format", "software-scaling", "software-resampling"] }
+ffmpeg-next = { version = "9", default-features = false, features = ["format", "filter", "software-scaling", "software-resampling"] }
 # Sound output: ALSA (served by PipeWire on most desktops) and WASAPI.
 cpal = "0.17"
 

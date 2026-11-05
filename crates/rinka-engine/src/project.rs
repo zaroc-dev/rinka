@@ -192,6 +192,11 @@ pub enum Content {
         fit: Fit,
         #[serde(default = "black")]
         background: Srgb8,
+        /// The file `source` was re-encoded from (smaller or at a lower
+        /// frame rate), kept so the change can be undone. Not played, so
+        /// not a dependency.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        original: Option<String>,
     },
 }
 
@@ -264,6 +269,13 @@ impl Project {
         project.format = FORMAT.to_owned();
         for path in project.dependencies() {
             check_asset_path(path)?;
+        }
+        if let Content::Video {
+            original: Some(original),
+            ..
+        } = &project.content
+        {
+            check_asset_path(original)?;
         }
         if !SPEED_RANGE.contains(&project.speed) {
             return Err(ProjectError::Setting(format!("speed {}", project.speed)));
@@ -644,6 +656,26 @@ mod tests {
         let json = p.to_json();
         assert!(json.contains(r##""color": "#1e6f73""##));
         assert_eq!(Project::from_json(&json).unwrap(), p);
+    }
+
+    #[test]
+    fn video_originals_are_checked_but_not_dependencies() {
+        let json = r#"{"format":"rinka.project","version":1,"title":"Rain",
+            "content":{"type":"video","source":"assets/rain-1080p.mp4","original":"assets/rain.mp4"}}"#;
+        let p = Project::from_json(json).unwrap();
+        assert_eq!(p.dependencies(), ["assets/rain-1080p.mp4"]);
+        assert!(p.to_json().contains(r#""original": "assets/rain.mp4""#));
+        let escape = json.replace("assets/rain.mp4", "../rain.mp4");
+        assert!(Project::from_json(&escape).is_err());
+        // Absent, it is not written.
+        let plain = r#"{"format":"rinka.project","version":1,"title":"Rain",
+            "content":{"type":"video","source":"assets/rain.mp4"}}"#;
+        assert!(
+            !Project::from_json(plain)
+                .unwrap()
+                .to_json()
+                .contains("original")
+        );
     }
 
     #[test]

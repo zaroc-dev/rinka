@@ -21,7 +21,7 @@ flowchart TD
 | --- | --- | --- |
 | `rinka-engine` | Project model (`project.rs`), color (`color.rs`), image decoding (`image.rs`), video conversion (`video.rs`), GPU profile and surfaces (`gpu.rs`), renderer (`render.rs`), scenes and effect passes (`scene.rs`), particle format and simulation (`particles.rs`), layer meshes and skinning (`mesh.rs`), offscreen capture (`capture.rs`) | none |
 | `rinka-wasm` | wasm-bindgen wrapper: `Preview` (canvas surface, asset cache, video frames, scenes), `decodeImage`/`decodeImageRaw` for the worker | browser only (`#![cfg(target_arch = "wasm32")]`) |
-| `rinka-host` | `serve` (Wayland/Win32 presenter + control endpoint), `import`, `thumbnail`, `preview` (winit window), `video-timing`, `info` | Linux: Wayland; Windows: Explorer child windows and named pipe; FFmpeg on both |
+| `rinka-host` | `serve` (Wayland/Win32 presenter + control endpoint), `import`, `thumbnail`, `transcode` and `video-probe` (editor jobs, `transcode.rs`), `preview` (winit window), `video-timing`, `info` | Linux: Wayland; Windows: Explorer child windows and named pipe; FFmpeg on both |
 | `rinka-import` | Wallpaper Engine: `pkg.rs`, `tex.rs`, `preprocess.rs`, `shader.rs`, `value.rs`, `assets.rs`, `convert.rs`, `particles.rs`, `puppet.rs`, `report.rs` | none |
 
 `app/` is the Electron editor: `src/main` (main process), `src/preload`
@@ -46,7 +46,9 @@ A project is a directory with `project.json` and its assets:
 - `color`: `{color: "#rrggbb"}`.
 - `image` / `video`: `{source: "assets/x", fit, background}`; `fit` is
   cover/contain/stretch/center/tile, computed in output pixels (center and
-  tile are 1:1 device pixels).
+  tile are 1:1 device pixels). A re-encoded video also has `original`: the
+  file it was made from, kept for undo, checked like any asset path but not
+  a dependency (the preview does not fetch it).
 - `scene`: canvas `width`/`height`, `fit`, `clear_color`, `color_space: gamma`,
   `layers` (bottom to top: texture, origin (center, y down), size, scale,
   angle (clockwise, radians), color, alpha, brightness, blend, optional
@@ -266,7 +268,14 @@ continue from there on `resume`. Assignments made while paused start paused.
 - `config.json` holds `sceneFps` (15 or 30), `soundVolume` (0–1),
   `soundMuted` and `videoDecoder` (`auto`, `nvdec`, `vaapi`, `d3d11va`,
   `software`). The editor sends them to the host (`settings`) on connect
-  and on change.
+  and on change. `videoEncoder` (`auto`, `nvenc`, `vaapi`, `software`) is
+  the editor's own.
+- Optimize video (`optimize.ts`, `video-file.tsx`): runs `rinka-host
+  transcode` from the original file into a hidden `.part` file, renames it
+  into `assets/`, then points `source` at it and records `original`. A
+  later optimize starts from the original again and deletes the previous
+  copy; Restore original deletes the copy and drops `original`. Outputs
+  showing the project get `reload`.
 - Preview sound: an `<audio>` element per sound layer with the same modes,
   silent while the window is hidden or the wallpaper is on a display.
 

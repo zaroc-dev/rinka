@@ -38,7 +38,13 @@ pub(crate) fn init() {
     static INIT: Once = Once::new();
     INIT.call_once(|| {
         ffmpeg::init().expect("initialize FFmpeg");
-        ffmpeg::util::log::set_level(ffmpeg::util::log::Level::Error);
+        // `RINKA_FFMPEG_LOG=debug` shows FFmpeg's reasons (filters, devices).
+        let level = match std::env::var("RINKA_FFMPEG_LOG").as_deref() {
+            Ok("debug") => ffmpeg::util::log::Level::Debug,
+            Ok("verbose") => ffmpeg::util::log::Level::Verbose,
+            _ => ffmpeg::util::log::Level::Error,
+        };
+        ffmpeg::util::log::set_level(level);
     });
 }
 
@@ -508,7 +514,6 @@ impl Source {
 }
 
 /// Reads stream properties without decoding.
-#[cfg(target_os = "linux")]
 pub fn probe(path: &Path) -> anyhow::Result<VideoInfo> {
     Ok(Source::open(path, None)?.info)
 }

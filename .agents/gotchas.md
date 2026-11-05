@@ -100,6 +100,19 @@ something costs more than a few minutes.
   rejects a stream (profile, size). Check that the first frame comes back in
   the device's pixel format before trusting it; frame threading is off for
   hardware decoding, so a silent fallback would also be single-threaded.
+- **`hwupload` needs its device before it initializes.** Filter graph parsing
+  initializes filters, so setting `hw_device_ctx` afterwards fails with
+  "Invalid argument". Unlabelled chain ends also connect only to filters
+  named `in`/`out`. The transcoder uploads frames to VA-API itself
+  (`av_hwframe_get_buffer` + transfer) instead.
+- **NVIDIA's VA-API driver only decodes.** `h264_vaapi` fails with "No usable
+  encoding entrypoint" on it; VA-API encoding needs Intel or AMD to test.
+- **MP4's last sample needs a duration.** Encoder packets without one end the
+  file on a zero-length sample, and the container's frame rate reads high
+  (15.88 for 15 fps). Give packets one frame's duration.
+- **Scaling an untagged video can change its colors.** The matrix guess
+  depends on height, so a re-encode must carry the source's resolved matrix
+  as an explicit tag.
 - **GPU decoder setup is slow.** Creating a CUDA or VA-API device and
   decoding a test frame takes 100–300 ms. `Player::open` returns after a
   software probe; the device is set up on the decode thread, or every
