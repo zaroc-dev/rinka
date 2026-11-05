@@ -51,7 +51,9 @@ reason here in the same change.
 | Matrix and range for the preview come from the native probe | WebCodecs misreports range. |
 | Timing from presentation timestamps; loops continue the timeline; position from the shown frame's file PTS | VFR and truncated files behave correctly. |
 | Hidden surfaces pause (no frame callback for 500 ms) | Static and covered content costs nothing. |
-| Speed is per project and scales everything that moves | One rate for video and scene time keeps a scene's parts (particles, effects, puppets, later scene video and sound) in step. |
+| Speed is per project and scales everything that moves except sound | One rate for video and scene time keeps a scene's parts (particles, effects, puppets, scene video) in step. Sound keeps its speed: resampling would change its pitch. |
+| Scene sound: cpal output, FFmpeg decode, one streaming decoder per layer; host-wide volume (default 50%) and mute | cpal covers ALSA/PipeWire and WASAPI with one API; FFmpeg is already the decoder. Streaming keeps playlists of songs out of memory. Half volume because a wallpaper starting music at login should not be loud. |
+| A project's sound plays once, on the first output showing it; the editor preview is silent while that wallpaper is on a display | Wallpapers are often on several outputs; two copies of a song out of phase, or preview and desktop together, sound broken. |
 | The 15/30 fps limit applies to scenes only | Videos keep their own timestamps, so a 24 or 30 fps video stays smooth; the limit saves power where Rinka chooses the rate. |
 
 ## Wallpaper Engine import

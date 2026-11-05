@@ -44,6 +44,14 @@ something costs more than a few minutes.
   `ELECTRON_RUN_AS_NODE=1`; `electron .` then fails with
   `Cannot read properties of undefined (reading 'getPath')`. Start it with
   `env -u ELECTRON_RUN_AS_NODE`.
+- **A test editor with its own `XDG_RUNTIME_DIR` has no sound server.**
+  libpulse looks for its socket there, so Chromium falls back to a silent
+  device; `<audio>` still advances. Check preview sound logic by wrapping
+  `HTMLMediaElement.prototype.play` in `RINKA_SMOKE_EVAL`, not by ear.
+- **A nested niri on a hidden workspace throttles everything.** Frame
+  callbacks arrive about once a second and Fifo presents block for 1–2 s,
+  so scene rates, hidden detection and even `shutdown` replies look broken.
+  Keep the nested window visible for timing checks.
 - **`capturePage` is not the screen.** It waits for the main thread and
   composites on demand, so it can show a frame the user never saw (it hid an
   8.7 s decode stall). Check user-visible behavior with screencopy (`grim`).

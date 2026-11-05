@@ -47,9 +47,13 @@ pub enum Request {
     Pause,
     /// Continues animation from where it stopped.
     Resume,
-    /// Changes host-wide playback settings; omitted ones stay as they are.
-    /// Returns the settings in effect.
-    Settings { scene_fps: Option<u32> },
+    /// Changes host-wide playback settings (`scene_fps`, `volume` 0..=1,
+    /// `muted`); omitted ones stay as they are. Returns the settings in
+    /// effect.
+    Settings {
+        #[serde(flatten)]
+        patch: crate::settings::SettingsPatch,
+    },
     /// Jumps videos to `position` seconds, on one output or on all.
     Seek {
         output: Option<String>,
@@ -148,15 +152,16 @@ mod tests {
         assert_eq!(id, "x");
         assert_eq!(req.unwrap_err().code, ErrorCode::BadRequest);
 
-        let (_, req) = parse_line(r#"{"id":3,"cmd":"settings","scene_fps":15}"#);
-        assert!(matches!(
-            req,
-            Ok(Request::Settings {
-                scene_fps: Some(15)
-            })
-        ));
+        let (_, req) = parse_line(r#"{"id":3,"cmd":"settings","scene_fps":15,"muted":true}"#);
+        let Ok(Request::Settings { patch }) = req else {
+            panic!("{req:?}")
+        };
+        assert_eq!(
+            (patch.scene_fps, patch.volume, patch.muted),
+            (Some(15), None, Some(true))
+        );
         let (_, req) = parse_line(r#"{"id":4,"cmd":"settings"}"#);
-        assert!(matches!(req, Ok(Request::Settings { scene_fps: None })));
+        assert!(matches!(req, Ok(Request::Settings { .. })));
 
         let (id, req) = parse_line("not json");
         assert_eq!(id, Value::Null);

@@ -134,6 +134,7 @@ fn translated_effect_runs_on_a_layer() {
             ),
         ]),
         shaders: BTreeMap::from([("invert".into(), info)]),
+        sounds: Vec::new(),
     };
     let assets = SceneAssets {
         textures: HashMap::from([

@@ -44,7 +44,7 @@ unexplained mismatch on validated scenes.
 | Feature | Scenes | Notes |
 | --- | --- | --- |
 | Particles, remaining parts | 22 | `controlpointattract` 54 objects, perspective 39, per-particle children 46, rope renderers 27 |
-| Sound | 13 | Playback plus audio-reactive values |
+| Sound | 0 | Playback done 2026-11-05; audio-reactive values still read silence |
 | Multi-buffer effects | 11 | Effects with named FBOs between passes |
 | `composelayer` layer shader | 10 | 13 layers |
 | Untranslatable shaders | 9 | 13 pairs; e.g. HLSL implicit truncation |
@@ -81,19 +81,19 @@ speed and color adjustments, host-wide scene frame rate 15/30.
 
 ## Next, in order
 
-1. **Sound playback** (#16): 16 scenes have sound layers. Video textures
-   landed on 2026-11-05 (`docs/m4-scene-video.md`); Vera Garnet now imports
-   fully.
-2. **Particle follow-ups**: control points (cursor attraction), per-particle
+1. **Wallpaper Engine user properties** (colors, sliders, toggles, combos,
+   sound volumes; 161 user-bound values use their defaults). Sound layers
+   and video textures landed on 2026-11-05 (`docs/m4-sound.md`,
+   `docs/m4-scene-video.md`).
+2. **Audio-reactive values** (`g_AudioSpectrum*`): silence today.
+3. **Particle follow-ups**: control points (cursor attraction), per-particle
    child systems, perspective particles, rope renderers.
-3. **Text layers**: 7 scenes; Moon Touch's remaining difference.
-4. **Composition layers** (`composelayer`) and **multi-buffer effects**:
+4. **Text layers**: 7 scenes; Moon Touch's remaining difference.
+5. **Composition layers** (`composelayer`) and **multi-buffer effects**:
    10 and 11 scenes.
-5. **M3 editor**: layer list (reorder, hide, transform, configure) with live
+6. **M3 editor**: layer list (reorder, hide, transform, configure) with live
    preview; save and reopen; then project stacks per output.
-6. Wallpaper Engine user properties in the UI (colors, sliders, toggles,
-   combos; 161 user-bound values use their defaults), SceneScript, animated
-   values.
+7. SceneScript, animated values.
 
 Reordered on 2026-10-14 after recounting by scene instead of by layer; the
 earlier order put solid and composition layers first on a count of 13

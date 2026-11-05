@@ -87,6 +87,29 @@ pub fn scene_videos(dir: &Path, project: &Project) -> Result<Vec<(String, PathBu
         .collect()
 }
 
+/// A scene's sound layers with the absolute paths of their files.
+#[cfg_attr(not(any(target_os = "linux", windows)), allow(dead_code))]
+pub fn scene_sounds(
+    dir: &Path,
+    project: &Project,
+) -> Result<Vec<(rinka_engine::project::SceneSound, Vec<PathBuf>)>, Error> {
+    let rinka_engine::Content::Scene(scene) = &project.content else {
+        return Ok(Vec::new());
+    };
+    scene
+        .sounds
+        .iter()
+        .map(|s| {
+            let files = s
+                .files
+                .iter()
+                .map(|f| asset_path(dir, f))
+                .collect::<Result<_, _>>()?;
+            Ok((s.clone(), files))
+        })
+        .collect()
+}
+
 /// The image asset of a project, if it shows one.
 pub fn image_asset(dir: &Path, project: &Project) -> Result<Option<PathBuf>, Error> {
     match &project.content {

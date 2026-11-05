@@ -76,7 +76,7 @@ jobs:
     steps:
       - name: Install build dependencies
         run: >
-          dnf -y install git tar xz cargo rust clang-devel ffmpeg-free-devel
+          dnf -y install git tar xz cargo rust clang-devel ffmpeg-free-devel alsa-lib-devel
           rpm-build systemd-rpm-macros
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7

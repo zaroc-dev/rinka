@@ -25,6 +25,18 @@ export interface SceneContent {
   }[];
   textures: Record<string, { clamp?: boolean; nearest?: boolean; video?: { width: number; height: number } }>;
   shaders: Record<string, { vertex: string; fragment: string }>;
+  /** Sound layers (`rinka_engine::project::SceneSound`). */
+  sounds?: SceneSound[];
+}
+
+export interface SceneSound {
+  id: string;
+  name: string;
+  files: string[];
+  mode?: "loop" | "random" | "single";
+  volume?: number;
+  /** Random mode: seconds of silence between tracks. */
+  pause?: [number, number];
 }
 
 export interface Provenance {
@@ -185,6 +197,9 @@ export interface AppSettings {
   trayIcon: boolean;
   /** Frame rate of animated scenes, on the desktop and in the preview. */
   sceneFps: SceneFps;
+  /** Gain of all scene sound, 0..1. */
+  soundVolume: number;
+  soundMuted: boolean;
 }
 
 export interface AppInfo {

@@ -140,6 +140,7 @@ fn render_with(
             ("textures/green.png".into(), info),
         ]),
         shaders: BTreeMap::new(),
+        sounds: Vec::new(),
     };
     let green = ImageData {
         width: 1,

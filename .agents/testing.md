@@ -140,6 +140,22 @@ preview's real pixels.
 Scene frame rate: run the host with `RUST_LOG=rinka_host=debug` and count
 `presented` lines over a few seconds.
 
+## Sound
+
+Do not play test sound through the user's speakers. Route it to a
+temporary null sink and record its monitor:
+
+```sh
+pw-cli create-node adapter '{ factory.name=support.null-audio-sink node.name=rinka-test media.class=Audio/Sink object.linger=1 audio.position=[FL FR] }'
+pw-record -P '{ stream.capture.sink = true }' --target rinka-test --format f32 out.wav &
+PIPEWIRE_NODE=rinka-test rinka-host sound-check PROJECT --seconds 4 --volume 1
+pw-cli destroy <sink id from wpctl status>
+```
+
+Check with `pw-link -l` (at `--volume 0`) that `rinka-host` links to
+`rinka-test` before playing anything audible. Compare levels with
+`ffmpeg -af volume=V,astats`.
+
 ## Test content
 
 - Videos: generate with `nix run nixpkgs#ffmpeg -- -f lavfi …` (solid colors

@@ -64,6 +64,7 @@ fn render(matrix: ColorMatrix, full_range: bool, yuv: [u8; 3]) -> Option<(Vec<[u
             },
         )]),
         shaders: BTreeMap::new(),
+        sounds: Vec::new(),
     };
     let assets = SceneAssets {
         textures: HashMap::new(),

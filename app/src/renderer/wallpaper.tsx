@@ -13,6 +13,7 @@ import {
   onVideoState,
   previewMoves,
   previewStatus,
+  setPreviewSoundAllowed,
   seekVideo,
   setPreviewReference,
   showEntry,
@@ -128,6 +129,8 @@ export function Wallpaper({ entry, entries, outputs, host, onEdited, onDelete, o
   const c = project.content;
   const backdrop = c.type === "color" ? c.color : c.type === "scene" ? "#000" : c.background;
   const liveOn = outputs.filter((o) => o.assignedId === entry.id);
+  // Its sound already plays on the desktop.
+  useEffect(() => setPreviewSoundAllowed(liveOn.length === 0), [liveOn.length]);
 
   return (
     <section class="stage" aria-label={project.title} style={{ background: backdrop }}>

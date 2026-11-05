@@ -160,7 +160,8 @@ async function rawOutputs(): Promise<RawOutput[]> {
 
 /** Hands the host-wide playback settings to the host. */
 async function sendHostSettings(): Promise<void> {
-  await host?.request("settings", { scene_fps: appSettings().sceneFps }).catch((e: Error) => {
+  const s = appSettings();
+  await host?.request("settings", { scene_fps: s.sceneFps, volume: s.soundVolume, muted: s.soundMuted }).catch((e: Error) => {
     console.warn("host settings:", e.message);
   });
 }
@@ -308,9 +309,15 @@ function registerIpc(): void {
   ipcMain.handle("settings:set", async (_e, patch: Partial<AppSettings>) => {
     if (typeof patch.trayIcon === "boolean") config.config.trayIcon = patch.trayIcon;
     if (patch.sceneFps !== undefined && SCENE_FPS_CHOICES.includes(patch.sceneFps)) config.config.sceneFps = patch.sceneFps;
+    if (typeof patch.soundVolume === "number" && patch.soundVolume >= 0 && patch.soundVolume <= 1) {
+      config.config.soundVolume = patch.soundVolume;
+    }
+    if (typeof patch.soundMuted === "boolean") config.config.soundMuted = patch.soundMuted;
     config.save();
     updateTray();
-    if (patch.sceneFps !== undefined) await sendHostSettings();
+    if (patch.sceneFps !== undefined || patch.soundVolume !== undefined || patch.soundMuted !== undefined) {
+      await sendHostSettings();
+    }
     return appSettings();
   });
   ipcMain.handle("host:start", () => startHost());
@@ -453,7 +460,13 @@ function showWindow(): void {
 
 function appSettings(): AppSettings {
   const fps = config.config.sceneFps as SceneFps;
-  return { trayIcon: config.config.trayIcon !== false, sceneFps: SCENE_FPS_CHOICES.includes(fps) ? fps : 30 };
+  const volume = config.config.soundVolume;
+  return {
+    trayIcon: config.config.trayIcon !== false,
+    sceneFps: SCENE_FPS_CHOICES.includes(fps) ? fps : 30,
+    soundVolume: typeof volume === "number" && volume >= 0 && volume <= 1 ? volume : 0.5,
+    soundMuted: config.config.soundMuted === true,
+  };
 }
 
 function trayState() {

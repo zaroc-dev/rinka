@@ -2,7 +2,7 @@
 // lifetime. Views mount the canvas where they need it.
 
 import init, { Preview, engineVersion } from "./wasm/rinka_wasm.js";
-import type { LibraryEntry, Project } from "../shared/api";
+import type { LibraryEntry, Project, SceneSound } from "../shared/api";
 import type { DecodeRequest, DecodeResponse } from "./decode-worker";
 import { matrixCode, Mp4Player } from "./mp4-player";
 
@@ -398,6 +398,106 @@ function stopScene(): void {
   sceneLoop = 0;
   for (const v of sceneVideos) v.close();
   sceneVideos = [];
+  for (const s of sceneSounds) s.close();
+  sceneSounds = [];
+}
+
+// ---- sound ---------------------------------------------------------------------
+//
+// Scene sound layers play through <audio> elements, with the same modes as
+// the host. They are silent while the window is hidden and while the
+// wallpaper already plays on a display, so it is never heard twice.
+
+/** Host-wide gain (volume, or 0 when muted). */
+let soundGain = 0.5;
+let soundAllowed = true;
+let sceneSounds: PreviewSound[] = [];
+
+class PreviewSound {
+  private readonly audio = new Audio();
+  private index = 0;
+  private timer = 0;
+  private active = false;
+
+  constructor(
+    private readonly urls: string[],
+    private readonly sound: SceneSound,
+  ) {
+    const mode = sound.mode ?? "loop";
+    if (mode === "random") this.index = Math.floor(Math.random() * urls.length);
+    this.audio.loop = mode === "loop" && urls.length === 1;
+    this.audio.src = urls[this.index]!;
+    this.audio.onended = () => this.next();
+    this.audio.onerror = () => console.error(`preview sound ${sound.name}: cannot play ${this.audio.src}`);
+    this.setGain();
+  }
+
+  setGain(): void {
+    this.audio.volume = Math.min(Math.max((this.sound.volume ?? 1) * soundGain, 0), 1);
+  }
+
+  setActive(active: boolean): void {
+    this.active = active;
+    if (active && this.timer === 0) void this.audio.play().catch((e: Error) => console.warn(`preview sound ${this.sound.name}:`, e.message));
+    else if (!active) this.audio.pause();
+  }
+
+  private next(): void {
+    const mode = this.sound.mode ?? "loop";
+    if (mode === "single") return;
+    if (mode === "loop") {
+      this.index = (this.index + 1) % this.urls.length;
+      return this.start();
+    }
+    const [lo, hi] = this.sound.pause ?? [0, 0];
+    this.timer = window.setTimeout(() => {
+      this.timer = 0;
+      this.index = Math.floor(Math.random() * this.urls.length);
+      this.start();
+    }, (lo + (hi - lo) * Math.random()) * 1000);
+  }
+
+  private start(): void {
+    this.audio.src = this.urls[this.index]!;
+    if (this.active) void this.audio.play().catch((e: Error) => console.warn(`preview sound ${this.sound.name}:`, e.message));
+  }
+
+  close(): void {
+    window.clearTimeout(this.timer);
+    this.audio.pause();
+    this.audio.removeAttribute("src");
+    this.audio.load();
+  }
+}
+
+function updateSounds(): void {
+  for (const s of sceneSounds) {
+    s.setGain();
+    s.setActive(soundAllowed && !document.hidden);
+  }
+}
+
+/** Sets the host-wide sound gain (the Settings volume, 0 when muted). */
+export function setPreviewSound(gain: number): void {
+  soundGain = gain;
+  updateSounds();
+}
+
+/** The preview stays silent while the wallpaper already plays on a display. */
+export function setPreviewSoundAllowed(allowed: boolean): void {
+  soundAllowed = allowed;
+  updateSounds();
+}
+
+document.addEventListener("visibilitychange", updateSounds);
+
+function playSceneSounds(entry: LibraryEntry, project: Project): void {
+  if (project.content.type !== "scene") return;
+  const base = `rinka://app/library/${entry.id}/`;
+  sceneSounds = (project.content.sounds ?? [])
+    .filter((s) => (s.volume ?? 1) > 0 && s.files.length > 0)
+    .map((s) => new PreviewSound(s.files.map((f) => base + f), s));
+  updateSounds();
 }
 
 /**
@@ -498,6 +598,7 @@ export async function showEntry(entry: LibraryEntry, project: Project = entry.pr
       if (p.isAnimated()) startScene();
       else draw();
       setSpeed(project.speed ?? 1);
+      playSceneSounds(entry, project);
       await playSceneVideos(entry, project, p, token);
       return;
     }

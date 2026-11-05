@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use rinka_engine::mesh::MeshAnimation;
 use rinka_engine::project::{
     ColorBlend, Content, Effect, EffectPass, Fit, Layer, LayerAttach, LayerBlend, LayerMesh,
-    Project, Provenance, SceneColorSpace, SceneContent, ShaderInfo, TextureInfo, UniformInfo,
-    VideoTextureInfo,
+    Project, Provenance, SceneColorSpace, SceneContent, SceneSound, ShaderInfo, SoundMode,
+    TextureInfo, UniformInfo, VideoTextureInfo,
 };
 use serde_json::Value;
 
@@ -472,6 +472,7 @@ fn convert_scene(
     };
 
     let mut layers = Vec::new();
+    let mut sounds = Vec::new();
     // Attached layer id → its plain world transform and report source.
     let mut attach_fallback: HashMap<String, (Transform, String)> = HashMap::new();
     for obj in &objects {
@@ -537,9 +538,18 @@ fn convert_scene(
             report.push(item);
             continue;
         }
-        let (kind, why) = if kind_of("sound") {
-            ("sound", "sound playback is not supported")
-        } else if kind_of("text") {
+        if kind_of("sound") {
+            let mut item = Item::new(&source, &name, "sound");
+            if let Some(sound) = builder.sound(obj, &id, &name, &mut item) {
+                item.native = Some(format!("sound {}", sound.id));
+                sounds.push(sound);
+            } else if item.status != Status::Unsupported {
+                item.unsupported("could not be converted");
+            }
+            report.push(item);
+            continue;
+        }
+        let (kind, why) = if kind_of("text") {
             ("text", "text layers are not supported yet")
         } else if kind_of("model") {
             ("3D model", "3D models are not supported")
@@ -597,6 +607,7 @@ fn convert_scene(
         layers,
         textures: builder.textures,
         shaders: builder.shaders,
+        sounds,
     };
     let mut project = Project::solid_color(title, rinka_engine::Srgb8::BLACK);
     project.content = Content::Scene(Box::new(content));
@@ -636,6 +647,97 @@ const PROVIDED: &[&str] = &[
 ];
 
 impl SceneBuilder {
+    /// Converts a sound object, copying its audio files into `sounds/`.
+    fn sound(&mut self, obj: &Value, id: &str, name: &str, item: &mut Item) -> Option<SceneSound> {
+        let mode = match obj
+            .get("playbackmode")
+            .and_then(Value::as_str)
+            .unwrap_or("loop")
+        {
+            "loop" => SoundMode::Loop,
+            "random" => SoundMode::Random,
+            "single" => SoundMode::Single,
+            other => {
+                item.partial(format!("playback mode {other} is treated as loop"));
+                SoundMode::Loop
+            }
+        };
+        if obj.get("startsilent").and_then(value::boolean) == Some(true) {
+            // Only SceneScript (`play()`) starts such a sound.
+            item.unsupported(
+                "it starts silent and only a script would play it; scripts do not run yet",
+            );
+            return None;
+        }
+        let volume = match obj.get("volume") {
+            Some(v) => {
+                let (_, extras) = value::unwrap(v);
+                if extras.script || extras.animation {
+                    item.partial("its volume is scripted or animated; the static value is used");
+                }
+                if let Some(user) = &extras.user {
+                    item.notes.push(format!(
+                        "its volume follows the property {user}; the default is used"
+                    ));
+                }
+                value::float(v).unwrap_or(1.0).clamp(0.0, 1.0)
+            }
+            None => 1.0,
+        };
+        let mut files = Vec::new();
+        for path in obj
+            .get("sound")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let Some(path) = path.as_str() else { continue };
+            let Some(bytes) = self.resolver.read(path, None) else {
+                item.partial(format!("{path} is missing"));
+                continue;
+            };
+            let file = path.rsplit('/').next().unwrap_or(path);
+            let (stem, ext) = file.rsplit_once('.').unwrap_or((file, "mp3"));
+            let project_path = format!(
+                "sounds/{}-{}.{}",
+                sanitize(stem),
+                short_hash(&path),
+                sanitize(&ext.to_lowercase())
+            );
+            self.files.insert(project_path.clone(), bytes);
+            files.push(project_path);
+        }
+        if files.is_empty() {
+            item.unsupported("it has no playable audio file");
+            return None;
+        }
+        let min = obj
+            .get("mintime")
+            .and_then(value::float)
+            .unwrap_or(0.0)
+            .max(0.0);
+        let max = obj
+            .get("maxtime")
+            .and_then(value::float)
+            .unwrap_or(min)
+            .max(min);
+        if volume == 0.0 {
+            item.notes.push("its volume is 0, so it is silent".into());
+        }
+        Some(SceneSound {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            files,
+            mode,
+            volume,
+            pause: if mode == SoundMode::Random {
+                [min, max]
+            } else {
+                [0.0, 0.0]
+            },
+        })
+    }
+
     /// Decodes `materials/<name>.tex` (or an existing path) into a PNG
     /// asset and returns its project path.
     fn texture(&mut self, name: &str, effect_dir: Option<&str>) -> Result<String, String> {

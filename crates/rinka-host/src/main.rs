@@ -18,6 +18,8 @@ mod thumbnail;
 // shared; `desktop` is this platform's presenter, with
 // `run(endpoint, assignments)`.
 #[cfg(any(target_os = "linux", windows))]
+mod audio;
+#[cfg(any(target_os = "linux", windows))]
 mod clock;
 #[cfg(any(target_os = "linux", windows))]
 mod control;
@@ -104,6 +106,17 @@ enum Cmd {
         #[arg(long, default_value_t = 3.0)]
         seconds: f64,
     },
+    /// Play a scene project's sound layers without showing it (development
+    /// aid for checking sound output).
+    #[cfg(any(target_os = "linux", windows))]
+    SoundCheck {
+        project: PathBuf,
+        #[arg(long, default_value_t = 3.0)]
+        seconds: f64,
+        /// Host-wide volume, 0..=1.
+        #[arg(long, default_value_t = 0.5)]
+        volume: f32,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -142,6 +155,23 @@ fn main() -> anyhow::Result<()> {
         }
         #[cfg(any(target_os = "linux", windows))]
         Cmd::VideoTiming { file, seconds } => video_timing(&file, seconds),
+        #[cfg(any(target_os = "linux", windows))]
+        Cmd::SoundCheck {
+            project,
+            seconds,
+            volume,
+        } => {
+            let loaded = project_io::load(&project).map_err(|e| anyhow::anyhow!(e.message))?;
+            let sounds = project_io::scene_sounds(&project, &loaded)
+                .map_err(|e| anyhow::anyhow!(e.message))?;
+            anyhow::ensure!(!sounds.is_empty(), "the project has no sound layers");
+            let mut audio = audio::Audio::new(volume);
+            let playing = audio.open(&sounds);
+            playing.set_playing(true);
+            println!("playing {} sound layer(s) for {seconds} s", sounds.len());
+            std::thread::sleep(std::time::Duration::from_secs_f64(seconds));
+            Ok(())
+        }
     }
 }
 

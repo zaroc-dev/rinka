@@ -1313,3 +1313,12 @@ h1 {
   display: grid;
   gap: 2px;
 }
+.volume {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.volume input[type="range"] {
+  width: 160px;
+  accent-color: var(--primary);
+}

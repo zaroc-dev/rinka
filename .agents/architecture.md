@@ -53,7 +53,9 @@ A project is a directory with `project.json` and its assets:
   `color_blend`, effects, optional `particles`), `textures` (path →
   clamp/nearest, and for video textures `video: {width, height, matrix,
   full_range}`, probed at import), `shaders` (id →
-  WGSL vertex/fragment paths, reflected uniform layout, texture slots).
+  WGSL vertex/fragment paths, reflected uniform layout, texture slots),
+  optional `sounds` (id, name, files, mode `loop`/`random`/`single`,
+  volume, random-mode `pause` range).
 - A layer with `mesh` draws its texture through a triangle mesh
   (`mesh.rs`): `{source, animations}`, where `source` is a `rinka.mesh`
   JSON asset (positions in layer pixels around the layer center, y down;
@@ -162,6 +164,13 @@ holds `{version: 1, assignments: {output: projectId}}`; the library is
   `Player` per video, paused, resumed and sped up with the scene clock.
   Each scene draw polls them and uploads new frames; a rebuilt scene gets
   the kept frames again. Thumbnails show each video's first frame.
+- Scene sound (`audio.rs`): one cpal output per host, opened with the first
+  sound; one decode thread per sound layer filling a 0.5 s buffer of stereo
+  `f32` at the output rate (FFmpeg + swresample); the callback mixes
+  playing layers with their volume and the host-wide gain. `sync_sound`
+  plays each project's sound on the first output showing it, unless paused
+  or hidden (scene surfaces count as hidden after 500 ms without a frame
+  callback, like videos). Speed does not apply to sound.
 - Project speed scales the scene clock (`clock.rs`) and the video player's
   timeline. A reload of the shown project keeps both timelines and only
   changes the rate.
@@ -215,7 +224,8 @@ message}}`. `hello {protocol: 1}` must come first. Commands: `capabilities`,
 `outputs` (names, geometry, transform, assignment, surface, backdrop and
 video state),
 `assign {output?, project}`, `unassign {output?}`, `reload {project}`,
-`pause`, `resume`, `seek {output?, position}`, `settings {scene_fps?}`
+`pause`, `resume`, `seek {output?, position}`, `settings {scene_fps?,
+volume?, muted?}`
 (host-wide; returns the settings in effect, which `capabilities` also
 reports), `shutdown`. Defined in
 `crates/rinka-host/src/protocol.rs`. `pause` stops all animation, videos and
@@ -246,8 +256,11 @@ continue from there on `resume`. Assignments made while paused start paused.
   `<video>` is the fallback ("Approx. colors"). Scenes fetch textures and WGSL
   and run a loop at the same frame-rate setting as the host. Project speed
   scales the preview's scene clock and its video player.
-- `config.json` holds `sceneFps` (15 or 30). The editor sends it to the host
-  (`settings`) on connect and on change.
+- `config.json` holds `sceneFps` (15 or 30), `soundVolume` (0–1) and
+  `soundMuted`. The editor sends them to the host (`settings`) on connect
+  and on change.
+- Preview sound: an `<audio>` element per sound layer with the same modes,
+  silent while the window is hidden or the wallpaper is on a display.
 
 ## Wallpaper Engine import
 
@@ -260,10 +273,13 @@ continue from there on `resume`. Assignments made while paused start paused.
    layers (`flat`) become a white 1×1 texture tinted with the object's
    color. A texture holding an MP4 is kept as `textures/<name>.mp4` and
    probed with the host's FFmpeg (`Options::probe_video`) for size, matrix,
-   range and sound; a sound track stays silent, as in Wallpaper Engine. Particle objects become one particle layer per system plus static
+   range and sound; a sound track stays silent, as in Wallpaper Engine.
+   Particle objects become one particle layer per system plus static
    children (`rinka-import/src/particles.rs`, sources in
-   `docs/m4-particles.md`). Text, sound, models, lights and composition
-   layers are reported unsupported.
+   `docs/m4-particles.md`). Sound objects become `sounds` (files copied to
+   `sounds/`, mode loop/random/single, volume, random pause); one that
+   starts silent is unsupported, as only a script would play it. Text,
+   models, lights and composition layers are reported unsupported.
 5. For each effect pass: merge material and scene overrides; combos from
    defaults, material, scene and provided textures; translate (cached by
    shader + combos).

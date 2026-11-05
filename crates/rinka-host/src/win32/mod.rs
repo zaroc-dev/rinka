@@ -28,6 +28,7 @@ use serde_json::{Value, json};
 use windows_sys::Win32::Foundation::{HINSTANCE, HWND};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 
+use crate::audio::{Audio, SceneSounds};
 use crate::clock::SceneClock;
 use crate::control::{self, Command};
 use crate::project_io::{self, ImageCache};
@@ -94,6 +95,7 @@ pub fn run(endpoint: PathBuf, saved: Saved) -> anyhow::Result<()> {
         rebuild_at: None,
         outputs: Vec::new(),
         assignments: saved.assignments,
+        audio: Audio::new(saved.settings.sound_gain()),
         settings: saved.settings,
         paused: false,
         stop: false,
@@ -184,6 +186,7 @@ struct Host {
     /// reconnected monitor gets its wallpaper back.
     assignments: HashMap<String, PathBuf>,
     settings: HostSettings,
+    audio: Audio,
     paused: bool,
     stop: bool,
 }
@@ -210,6 +213,9 @@ struct Wallpaper {
     scene_clock: SceneClock,
     /// Players of the scene's video textures, on the scene's clock.
     scene_videos: SceneVideos,
+    /// The scene's sound layers, as opened (to keep them across reloads).
+    sound_spec: Vec<(rinka_engine::project::SceneSound, Vec<PathBuf>)>,
+    sounds: SceneSounds,
     /// The scene animates and the next frame is due at this instant.
     next_frame: Option<Instant>,
     /// The project changed since the target was last updated.
@@ -237,6 +243,7 @@ struct Prepared {
     video: Option<(Player, OwnedFrame)>,
     /// The scene's video textures: project path and file.
     scene_videos: Vec<(String, PathBuf)>,
+    sounds: Vec<(rinka_engine::project::SceneSound, Vec<PathBuf>)>,
 }
 
 impl Host {
@@ -264,6 +271,7 @@ impl Host {
         }
         let scene = project_io::scene_assets(dir, &project)?.map(std::sync::Arc::new);
         let scene_videos = project_io::scene_videos(dir, &project)?;
+        let sounds = project_io::scene_sounds(dir, &project)?;
         Ok(Prepared {
             dir: dir.to_owned(),
             project,
@@ -271,6 +279,7 @@ impl Host {
             scene,
             video,
             scene_videos,
+            sounds,
         })
     }
 
@@ -317,6 +326,15 @@ impl Host {
                             SceneVideos::open(&[], now, paused, 1.0),
                         )
                     });
+                // ... and its sound, unless the sound layers changed.
+                let kept_sounds = self.outputs[index]
+                    .wallpaper
+                    .as_mut()
+                    .filter(|w| {
+                        same_path(&w.project_dir, &prepared.dir) && w.sound_spec == prepared.sounds
+                    })
+                    .map(|w| std::mem::take(&mut w.sounds));
+                let sounds = kept_sounds.unwrap_or_else(|| self.audio.open(&prepared.sounds));
                 let scene_videos = match kept {
                     Some(mut videos) => {
                         videos.set_rate(now, prepared.project.speed);
@@ -339,6 +357,8 @@ impl Host {
                     video_texture: None,
                     scene_clock,
                     scene_videos,
+                    sound_spec: prepared.sounds,
+                    sounds,
                     next_frame: None,
                     dirty: false,
                     shown: false,
@@ -619,6 +639,8 @@ impl Host {
     }
 
     fn update_playback_state(&mut self, now: Instant) {
+        // Each project's sound plays once, from the first output showing it.
+        let mut heard: Vec<PathBuf> = Vec::new();
         for slot in &mut self.outputs {
             let Some(w) = slot.wallpaper.as_mut() else {
                 continue;
@@ -630,6 +652,11 @@ impl Host {
             } else {
                 w.scene_clock.resume(now);
                 w.scene_videos.resume(now);
+            }
+            if !w.sounds.is_empty() {
+                let first = !heard.iter().any(|d| same_path(d, &w.project_dir));
+                heard.push(w.project_dir.clone());
+                w.sounds.set_playing(first && !paused);
             }
             if let Some(player) = &mut w.player {
                 if paused {
@@ -857,8 +884,9 @@ impl Host {
                 self.update_playback_state(Instant::now());
                 Ok(Value::Null)
             }
-            Request::Settings { scene_fps } => {
-                self.settings.apply(scene_fps)?;
+            Request::Settings { patch } => {
+                self.settings.apply(patch)?;
+                self.audio.set_volume(self.settings.sound_gain());
                 Ok(json!(self.settings))
             }
             Request::Seek { output, position } => {

@@ -83,6 +83,7 @@ fn render(layers: Vec<Layer>) -> Option<Vec<[u8; 4]>> {
             .map(|(p, _)| ((*p).into(), info.clone()))
             .collect(),
         shaders: BTreeMap::new(),
+        sounds: Vec::new(),
     };
     let assets = SceneAssets {
         textures: colors

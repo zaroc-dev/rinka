@@ -25,7 +25,7 @@ use rinka_engine::{ColorMatrix, ColorRange, YuvFrame};
 /// Decoded frames buffered ahead of presentation.
 const QUEUE_FRAMES: usize = 6;
 
-fn init() {
+pub(crate) fn init() {
     static INIT: Once = Once::new();
     INIT.call_once(|| {
         ffmpeg::init().expect("initialize FFmpeg");

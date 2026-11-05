@@ -41,12 +41,19 @@ pub fn saved(dir: &Path) -> Saved {
     struct Config {
         assignments: HashMap<String, String>,
         scene_fps: Option<u32>,
+        sound_volume: Option<f32>,
+        sound_muted: Option<bool>,
     }
     let path = dir.join("config.json");
     match std::fs::read_to_string(&path).map(|t| serde_json::from_str::<Config>(&t)) {
         Ok(Ok(config)) => {
             let mut settings = HostSettings::default();
-            if let Err(e) = settings.apply(config.scene_fps) {
+            let patch = crate::settings::SettingsPatch {
+                scene_fps: config.scene_fps,
+                volume: config.sound_volume,
+                muted: config.sound_muted,
+            };
+            if let Err(e) = settings.apply(patch) {
                 log::warn!("{}: {}", path.display(), e.message);
             }
             Saved {

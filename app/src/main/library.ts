@@ -263,6 +263,9 @@ export interface Config {
   workshopFolder?: string;
   /** Frame rate of animated scenes (default 30); the host reads it on --restore. */
   sceneFps?: number;
+  /** Scene sound gain 0..1 (default 0.5) and mute; read by the host too. */
+  soundVolume?: number;
+  soundMuted?: boolean;
 }
 
 export class ConfigStore {

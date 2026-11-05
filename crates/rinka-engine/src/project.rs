@@ -314,6 +314,42 @@ pub struct SceneContent {
     /// Translated effect shaders by id.
     #[serde(default)]
     pub shaders: std::collections::BTreeMap<String, ShaderInfo>,
+    /// Sound layers. Hosts play them; the engine only describes them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sounds: Vec<SceneSound>,
+}
+
+/// A sound layer: audio files played while the scene shows, at their own
+/// speed (project speed does not apply), paused with the scene.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SceneSound {
+    /// Stable id; imported sounds keep their source object id.
+    pub id: String,
+    pub name: String,
+    /// Project paths of the audio files, in playlist order.
+    pub files: Vec<String>,
+    #[serde(default)]
+    pub mode: SoundMode,
+    /// Linear gain, 0..=1.
+    #[serde(default = "one")]
+    pub volume: f32,
+    /// [`SoundMode::Random`]: seconds of silence between tracks, drawn
+    /// uniformly from this range.
+    #[serde(default)]
+    pub pause: [f32; 2],
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SoundMode {
+    /// The files in order, repeating.
+    #[default]
+    Loop,
+    /// A random file, then a random pause, repeating.
+    Random,
+    /// One file once.
+    Single,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -570,6 +606,11 @@ fn white() -> [f32; 3] {
 impl SceneContent {
     pub fn dependencies(&self) -> Vec<&str> {
         let mut deps: Vec<&str> = self.textures.keys().map(String::as_str).collect();
+        deps.extend(
+            self.sounds
+                .iter()
+                .flat_map(|s| s.files.iter().map(String::as_str)),
+        );
         for s in self.shaders.values() {
             deps.push(&s.vertex);
             deps.push(&s.fragment);
