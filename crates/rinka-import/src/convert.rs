@@ -744,7 +744,9 @@ impl SceneBuilder {
             item.notes
                 .push("plays its video texture looped, on the scene's clock".into());
             if self.videos_with_audio.contains(path) {
-                item.partial("the video texture's sound is not played yet");
+                // Wallpaper Engine does not play it either.
+                item.notes
+                    .push("its sound track stays silent, as in Wallpaper Engine".into());
             }
         }
     }

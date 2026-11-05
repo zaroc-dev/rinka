@@ -284,9 +284,11 @@ something costs more than a few minutes.
   GPL-3.0 (linux-wallpaperengine).** Read them for defaults, do not copy
   code.
 
-- **A `.tex` can be an MP4 with a sound track.** Vera Garnet's 4K60 H.264
-  texture carries AAC audio; the import reports the layer partial until
-  sound plays rather than dropping it silently.
+- **A `.tex` can be an MP4 with a sound track, which Wallpaper Engine does
+  not play.** Vera Garnet's 4K60 H.264 texture carries AAC audio. Video
+  textures play muted in Wallpaper Engine (Steam discussions
+  598515152383392164 and 3187991824512096158; authors add sound layers
+  instead), so the import notes it without a loss. Verify on Windows.
 - **Video textures have no mipmaps.** Drawn much smaller than their size
   (a 4K video in a 480-px thumbnail) they alias: mean error 3.1/255 against
   FFmpeg's area scaling, 0.1/255 at full size.

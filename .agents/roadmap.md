@@ -37,6 +37,7 @@ unexplained mismatch on validated scenes.
     one- and two-channel particle sprites (16 scenes) now draw as Wallpaper
     Engine draws them.
 - Crimson Sun native: ~28 fps, ~2 ms CPU per frame, 507 MiB GPU.
+- Vera Garnet (4K60 video texture): supported since 2026-11-05.
 
 ## Blockers by scenes affected
 
@@ -49,7 +50,7 @@ unexplained mismatch on validated scenes.
 | Untranslatable shaders | 9 | 13 pairs; e.g. HLSL implicit truncation |
 | Text | 7 | 37 layers |
 | Camera parallax, bloom | 6 each | Scene-level settings |
-| Video textures on layers | 0 | Done 2026-11-05; Vera Garnet's is partial until its sound plays |
+| Video textures on layers | 0 | Done 2026-11-05 |
 | Composition layers (effects on everything below) | 4 | |
 | Color blend modes on layers | 1 left | Done on image and solid layers (2026-10-15); left: one text layer (with text) |
 | Effects on solid layers | 2 | Such layers import hidden (audio bars, a tint) |
@@ -80,9 +81,9 @@ speed and color adjustments, host-wide scene frame rate 15/30.
 
 ## Next, in order
 
-1. **Sound playback** (#16): 13 scenes, and the last thing Vera Garnet
-   lacks (its video texture has a sound track). Video textures landed on
-   2026-11-05 (`docs/m4-scene-video.md`).
+1. **Sound playback** (#16): 16 scenes have sound layers. Video textures
+   landed on 2026-11-05 (`docs/m4-scene-video.md`); Vera Garnet now imports
+   fully.
 2. **Particle follow-ups**: control points (cursor attraction), per-particle
    child systems, perspective particles, rope renderers.
 3. **Text layers**: 7 scenes; Moon Touch's remaining difference.

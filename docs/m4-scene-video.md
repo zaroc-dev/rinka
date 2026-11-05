@@ -30,7 +30,7 @@ AAC sound) and a lightning particle system.
 
 | Check | Result |
 | --- | --- |
-| Import report | partial: the video layer's sound is not played yet; particles supported |
+| Import report | supported; the video's sound track stays silent, as in Wallpaper Engine |
 | GPU readback (`scene_video.rs`), BT.709 limited and BT.601 full | within ±1 of independent equations |
 | Thumbnail at 3840×2160 vs FFmpeg's BT.709 limited decode | mean max-channel error 0.10/255, no pixel off by more than 4 |
 | Same at 480×270 vs FFmpeg area scaling | mean 3.1/255 (no mipmaps; see gotchas) |
@@ -39,7 +39,8 @@ AAC sound) and a lightning particle system.
 | Decode CPU | 7.0 s user per 10 s (≈0.7 core), software H.264 at 4K60 |
 | Editor preview | plays; first frame after ~6–20 s (43 MB fetch and demux) |
 
-Library survey (41 items): Vera Garnet's video layer is partial (sound);
+Library survey (41 items): Vera Garnet imports fully (3 fully supported
+scenes now);
 Dreams of the Deep Sea's fish video layer (鱼) is now supported, the scene
 still blocked by other features.
 
@@ -52,3 +53,5 @@ still blocked by other features.
 - Preview and native pixels on the real screen side by side.
 - Windows host: builds, not run.
 - Videos in effect texture slots (none in the library).
+- That Wallpaper Engine plays video textures muted comes from Steam
+  community discussions, not its documentation; check on Windows.

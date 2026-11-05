@@ -260,8 +260,7 @@ continue from there on `resume`. Assignments made while paused start paused.
    layers (`flat`) become a white 1×1 texture tinted with the object's
    color. A texture holding an MP4 is kept as `textures/<name>.mp4` and
    probed with the host's FFmpeg (`Options::probe_video`) for size, matrix,
-   range and sound; a sound track makes the layer partial until sound
-   plays. Particle objects become one particle layer per system plus static
+   range and sound; a sound track stays silent, as in Wallpaper Engine. Particle objects become one particle layer per system plus static
    children (`rinka-import/src/particles.rs`, sources in
    `docs/m4-particles.md`). Text, sound, models, lights and composition
    layers are reported unsupported.
