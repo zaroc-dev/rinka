@@ -1,6 +1,6 @@
 # Roadmap
 
-Status as of 2026-10-15. Measurements behind each line are in `docs/`.
+Status as of 2026-11-05. Measurements behind each line are in `docs/`.
 
 ## Milestones
 
@@ -75,9 +75,14 @@ Max count: median 20, largest 100 000.
 
 Values: 162 scripted, 20 animated, 161 user-bound (all use static values now).
 
+Playback settings (2026-11-05, `docs/playback-settings.md`): per-project
+speed and color adjustments, host-wide scene frame rate 15/30.
+
 ## Next, in order
 
-1. **Sound playback** (#16): 13 scenes use it.
+1. **Video textures on layers** (Vera Garnet: one full-screen MP4 inside a
+   `.tex` plus lightning particles) and **sound playback** (#16): 2 and 13
+   scenes. Video first: Vera Garnet's only blocker.
 2. **Particle follow-ups**: control points (cursor attraction), per-particle
    child systems, perspective particles, rope renderers.
 3. **Text layers**: 7 scenes; Moon Touch's remaining difference.
@@ -85,8 +90,9 @@ Values: 162 scripted, 20 animated, 161 user-bound (all use static values now).
    10 and 11 scenes.
 5. **M3 editor**: layer list (reorder, hide, transform, configure) with live
    preview; save and reopen; then project stacks per output.
-6. Video textures on layers, SceneScript, animated values, user properties
-   in the UI.
+6. Wallpaper Engine user properties in the UI (colors, sliders, toggles,
+   combos; 161 user-bound values use their defaults), SceneScript, animated
+   values.
 
 Reordered on 2026-10-14 after recounting by scene instead of by layer; the
 earlier order put solid and composition layers first on a count of 13

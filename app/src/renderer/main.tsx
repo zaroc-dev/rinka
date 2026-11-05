@@ -1,9 +1,10 @@
 import { render } from "preact";
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import type { AppInfo, AppSettings, HostState, LibraryEntry, OutputInfo, Project, RinkaApi } from "../shared/api";
+import { SCENE_FPS_CHOICES } from "../shared/api";
 import { BackIcon, CloseIcon, GearIcon, ImportIcon, PlusIcon, SearchIcon } from "./icons";
 import { type Filter, Library, SORTS, type Sort, VIEW_MODES, type ViewMode } from "./library";
-import { onPreviewStatus, previewStatus, startPreview } from "./preview";
+import { onPreviewStatus, previewStatus, setPreviewFps, startPreview } from "./preview";
 import { api, errorMessage, outputPixels, readPref, resolution, writePref } from "./util";
 import { Wallpaper } from "./wallpaper";
 import { ImportView } from "./import";
@@ -63,6 +64,7 @@ function App() {
     void api.hostState().then(setHost);
     api.onHostState(setHost);
     void startPreview().catch(() => {});
+    void api.appSettings().then((s) => setPreviewFps(s.sceneFps));
   }, []);
 
   useEffect(() => {
@@ -387,6 +389,34 @@ function Settings({ host, outputs, onClose }: { host: HostState; outputs: Output
               </>
             )}
           </dl>
+        </section>
+
+        <section class="sheet-section">
+          <h3>Animation</h3>
+          <div class="setting-row">
+            <span>
+              Frame rate
+              <span class="muted small">Scenes, particles and effects draw at this rate, on your displays and in the preview. Videos keep their own frame rate.</span>
+            </span>
+            <div class="segmented fit" role="radiogroup" aria-label="Frame rate">
+              {SCENE_FPS_CHOICES.map((fps) => (
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={settings?.sceneFps === fps}
+                  disabled={!settings}
+                  onClick={() =>
+                    void api.setAppSettings({ sceneFps: fps }).then((s) => {
+                      setSettings(s);
+                      setPreviewFps(s.sceneFps);
+                    })
+                  }
+                >
+                  {fps} fps
+                </button>
+              ))}
+            </div>
+          </div>
         </section>
 
         <section class="sheet-section">

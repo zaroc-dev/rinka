@@ -20,8 +20,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
-import type { Content, Fit, ImportResult, Project } from "../shared/api";
-import { FITS } from "../shared/api";
+import type { ColorAdjust, Content, Fit, ImportResult, Project } from "../shared/api";
+import { FITS, NEUTRAL_ADJUST } from "../shared/api";
 
 const MANIFEST = "project.json";
 const HEX = /^#[0-9a-f]{6}$/;
@@ -64,6 +64,22 @@ export function checkProject(p: unknown): Project {
     throw new Error("invalid project content");
   }
   const checked: Project = { format: "rinka.project", version: 1, title: project.title, content };
+  // Same ranges as the engine (`rinka_engine::project`).
+  if (project.speed !== undefined) {
+    if (typeof project.speed !== "number" || !(project.speed >= 0.1 && project.speed <= 4)) throw new Error("invalid speed");
+    if (project.speed !== 1) checked.speed = project.speed;
+  }
+  if (project.adjust !== undefined) {
+    const a = project.adjust;
+    const keys = Object.keys(a) as (keyof ColorAdjust)[];
+    const ok =
+      typeof a === "object" &&
+      keys.every((k) => k in NEUTRAL_ADJUST && typeof a[k] === "number" && Number.isFinite(a[k])) &&
+      (["brightness", "contrast", "saturation"] as const).every((k) => a[k] === undefined || (a[k] >= 0 && a[k] <= 4)) &&
+      (a.hue === undefined || Math.abs(a.hue) <= 360);
+    if (!ok) throw new Error("invalid color adjustment");
+    if (keys.some((k) => a[k] !== NEUTRAL_ADJUST[k])) checked.adjust = a;
+  }
   if (project.provenance) checked.provenance = project.provenance;
   return checked;
 }
@@ -245,6 +261,8 @@ export interface Config {
   trayIcon?: boolean;
   /** Manually selected Steam or Wallpaper Engine folder. */
   workshopFolder?: string;
+  /** Frame rate of animated scenes (default 30); the host reads it on --restore. */
+  sceneFps?: number;
 }
 
 export class ConfigStore {

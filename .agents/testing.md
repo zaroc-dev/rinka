@@ -129,6 +129,17 @@ WAYLAND_DISPLAY=wayland-2 NIRI_SOCKET=/run/user/1000/niri.wayland-2.PID.sock \
 Then `niri msg action open-overview` and `grim` against the nested display.
 Remove the stale `wayland-2` socket files after killing it.
 
+The editor can run there too, isolated from the real library and host:
+`env -u ELECTRON_RUN_AS_NODE WAYLAND_DISPLAY=/run/user/1000/wayland-2
+RINKA_USER_DATA=/tmp/ud XDG_RUNTIME_DIR=/tmp/rt nix develop -c
+./node_modules/.bin/electron .` (in `app/`). The absolute display path is
+needed because `XDG_RUNTIME_DIR` moves; moving it keeps the editor from
+reaching (and reconfiguring) the user's running host. `grim` then shows the
+preview's real pixels.
+
+Scene frame rate: run the host with `RUST_LOG=rinka_host=debug` and count
+`presented` lines over a few seconds.
+
 ## Test content
 
 - Videos: generate with `nix run nixpkgs#ffmpeg -- -f lavfi …` (solid colors

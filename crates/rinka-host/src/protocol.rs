@@ -47,6 +47,9 @@ pub enum Request {
     Pause,
     /// Continues animation from where it stopped.
     Resume,
+    /// Changes host-wide playback settings; omitted ones stay as they are.
+    /// Returns the settings in effect.
+    Settings { scene_fps: Option<u32> },
     /// Jumps videos to `position` seconds, on one output or on all.
     Seek {
         output: Option<String>,
@@ -144,6 +147,16 @@ mod tests {
         let (id, req) = parse_line(r#"{"id":"x","cmd":"bogus"}"#);
         assert_eq!(id, "x");
         assert_eq!(req.unwrap_err().code, ErrorCode::BadRequest);
+
+        let (_, req) = parse_line(r#"{"id":3,"cmd":"settings","scene_fps":15}"#);
+        assert!(matches!(
+            req,
+            Ok(Request::Settings {
+                scene_fps: Some(15)
+            })
+        ));
+        let (_, req) = parse_line(r#"{"id":4,"cmd":"settings"}"#);
+        assert!(matches!(req, Ok(Request::Settings { scene_fps: None })));
 
         let (id, req) = parse_line("not json");
         assert_eq!(id, Value::Null);

@@ -6,7 +6,8 @@ import { createReadStream, existsSync, renameSync, statSync, writeFileSync } fro
 import { Readable } from "node:stream";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import type { AppSettings, HostState, ImportResult, LibraryEntry, OutputInfo, PreviewReport, Project } from "../shared/api";
+import { SCENE_FPS_CHOICES } from "../shared/api";
+import type { AppSettings, HostState, SceneFps, ImportResult, LibraryEntry, OutputInfo, PreviewReport, Project } from "../shared/api";
 import { connectOrSpawn, defaultSocketPath, findHostBinary, type HostConnection } from "./host";
 import { ConfigStore, IMPORT_EXTENSIONS, Library, type StoredEntry } from "./library";
 import { Thumbnails } from "./thumbnails";
@@ -157,6 +158,13 @@ async function rawOutputs(): Promise<RawOutput[]> {
   return host ? host.request<RawOutput[]>("outputs") : [];
 }
 
+/** Hands the host-wide playback settings to the host. */
+async function sendHostSettings(): Promise<void> {
+  await host?.request("settings", { scene_fps: appSettings().sceneFps }).catch((e: Error) => {
+    console.warn("host settings:", e.message);
+  });
+}
+
 /** Re-applies saved assignments, e.g. after the host restarted. */
 async function restoreAssignments(): Promise<void> {
   for (const output of await rawOutputs()) {
@@ -201,6 +209,7 @@ async function startHost(): Promise<HostState> {
       compositor: caps.presentation.compositor,
       paused: caps.paused,
     });
+    await sendHostSettings();
     await restoreAssignments();
   } catch (e) {
     host = null;
@@ -296,10 +305,12 @@ function registerIpc(): void {
   ipcMain.handle("host:state", () => hostState);
   ipcMain.handle("host:pause", (_e, paused: boolean) => setPaused(paused));
   ipcMain.handle("settings:get", () => appSettings());
-  ipcMain.handle("settings:set", (_e, patch: Partial<AppSettings>) => {
+  ipcMain.handle("settings:set", async (_e, patch: Partial<AppSettings>) => {
     if (typeof patch.trayIcon === "boolean") config.config.trayIcon = patch.trayIcon;
+    if (patch.sceneFps !== undefined && SCENE_FPS_CHOICES.includes(patch.sceneFps)) config.config.sceneFps = patch.sceneFps;
     config.save();
     updateTray();
+    if (patch.sceneFps !== undefined) await sendHostSettings();
     return appSettings();
   });
   ipcMain.handle("host:start", () => startHost());
@@ -441,7 +452,8 @@ function showWindow(): void {
 // ---- tray and settings -----------------------------------------------------------
 
 function appSettings(): AppSettings {
-  return { trayIcon: config.config.trayIcon !== false };
+  const fps = config.config.sceneFps as SceneFps;
+  return { trayIcon: config.config.trayIcon !== false, sceneFps: SCENE_FPS_CHOICES.includes(fps) ? fps : 30 };
 }
 
 function trayState() {

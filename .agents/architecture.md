@@ -38,6 +38,11 @@ A project is a directory with `project.json` and its assets:
   "provenance": { "source": "wallpaper-engine", "id": "…", "report": "import-report.json", "reference": "reference/preview.gif" } }
 ```
 
+- `speed` (optional, 0.1–4, default 1): playback rate of video and scene
+  time. `adjust` (optional): `{brightness, contrast, saturation, hue}` on the
+  finished frame's encoded values, as CSS filters define them (hue rotation,
+  saturation, contrast, brightness). Both are left out of the file at their
+  neutral values, so projects without them stay readable by older builds.
 - `color`: `{color: "#rrggbb"}`.
 - `image` / `video`: `{source: "assets/x", fit, background}`; `fit` is
   cover/contain/stretch/center/tile, computed in output pixels (center and
@@ -88,6 +93,11 @@ holds `{version: 1, assignments: {output: projectId}}`; the library is
   `Source` (image or YUV); `set_scene` attaches a `GpuScene`; `render(&Frame)`.
 - `Frame`: `FrameViews { srgb, raw }` of the same texture, render size,
   output size (larger than the target for the scaled-down preview), scene time.
+- Color adjustments (`project.adjust`): when not neutral, `Target::render`
+  draws the content into an intermediate texture of the frame's format and
+  a full-frame pass maps its encoded RGB through one affine matrix
+  (`ColorAdjust::matrix`) onto the frame's raw view. Thumbnails, the niri
+  backdrop and the preview go through the same call.
 - `SurfaceSetup`: non-sRGB 8-bit storage format with both sRGB and raw view
   formats, opaque alpha when available, Fifo. `draw()` acquires, records via a
   closure, presents, reconfigures once on outdated.
@@ -136,7 +146,13 @@ holds `{version: 1, assignments: {output: projectId}}`; the library is
   timer wakes at the next due frame; each present requests a frame callback,
   and the next draw waits for it. No callback for 500 ms means hidden: the
   clock pauses.
-- Scenes with effects animate at 30 fps (`SCENE_FPS`) through the same timer.
+- Animated scenes draw at the host-wide `scene_fps` (`settings.rs`, 15 or 30
+  from the editor, default 30) through the same timer. The next frame is due
+  one interval after the previous due time, not after the draw, so the rate
+  holds; a frame more than an interval late restarts the cadence.
+- Project speed scales the scene clock (`clock.rs`) and the video player's
+  timeline. A reload of the shown project keeps both timelines and only
+  changes the rate.
 - Under niri (`$NIRI_SOCKET` set) each wallpaper also gets a `rinka-backdrop`
   background surface, created before the wallpaper so it stacks below it.
   A `place-within-backdrop` layer rule moves it into the overview backdrop.
@@ -145,7 +161,8 @@ holds `{version: 1, assignments: {output: projectId}}`; the library is
   and animated scenes, when niri's event stream (`niri.rs`, its own thread)
   reports the overview opening. It presents with Mailbox or Immediate (see
   gotchas).
-- `--restore [DIR]` reads the editor's `config.json` assignments at start.
+- `--restore [DIR]` reads the editor's `config.json` assignments and
+  `sceneFps` at start.
 
 ## Control protocol (v1)
 
@@ -186,7 +203,9 @@ message}}`. `hello {protocol: 1}` must come first. Commands: `capabilities`,
 `outputs` (names, geometry, transform, assignment, surface, backdrop and
 video state),
 `assign {output?, project}`, `unassign {output?}`, `reload {project}`,
-`pause`, `resume`, `seek {output?, position}`, `shutdown`. Defined in
+`pause`, `resume`, `seek {output?, position}`, `settings {scene_fps?}`
+(host-wide; returns the settings in effect, which `capabilities` also
+reports), `shutdown`. Defined in
 `crates/rinka-host/src/protocol.rs`. `pause` stops all animation, videos and
 scenes, and keeps the last frame; scene clocks (`clock.rs`) stand still and
 continue from there on `resume`. Assignments made while paused start paused.
@@ -206,12 +225,17 @@ continue from there on `resume`. Assignments made while paused start paused.
 - Renderer: Preact views: Library (grid/compact/list, filters, sort, search,
   drag-and-drop), Wallpaper (full-window preview, glass bar, display map,
   scene tools, report popover), Import (workshop items, report panel),
-  Settings. The open wallpaper is in the URL hash (`#/w/<id>`).
+  Settings. The open wallpaper is in the URL hash (`#/w/<id>`). The
+  wallpaper bar's sliders button opens speed and color adjustments
+  (`adjust.tsx`), saved into the project like other edits.
 - Preview (`preview.ts`): one canvas and one WebGPU device for the app's
   lifetime. Images decode in a worker. Video plays through WebCodecs
   (`mp4-player.ts`, mp4box sample table) feeding raw planes to the engine;
   `<video>` is the fallback ("Approx. colors"). Scenes fetch textures and WGSL
-  and run a 30 fps loop.
+  and run a loop at the same frame-rate setting as the host. Project speed
+  scales the preview's scene clock and its video player.
+- `config.json` holds `sceneFps` (15 or 30). The editor sends it to the host
+  (`settings`) on connect and on change.
 
 ## Wallpaper Engine import
 

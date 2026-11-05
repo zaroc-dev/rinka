@@ -171,6 +171,7 @@ interface PreviewMedia {
   play(): void;
   pause(): void;
   seek(seconds: number): void;
+  setRate(rate: number): void;
   close(): void;
 }
 
@@ -282,6 +283,7 @@ async function openCodecMedia(entry: LibraryEntry, url: string, p: Preview): Pro
     play: () => player.play(),
     pause: () => player.pause(),
     seek: (t) => player.seek(t),
+    setRate: (rate) => player.setRate(rate),
     close: () => player.close(),
   };
 }
@@ -331,6 +333,9 @@ async function openElementMedia(url: string, p: Preview): Promise<PreviewMedia> 
     seek: (t) => {
       v.currentTime = t;
     },
+    setRate: (rate) => {
+      v.playbackRate = rate;
+    },
     close: () => {
       closed = true;
       v.pause();
@@ -357,14 +362,31 @@ let generation = 0;
 
 // ---- scenes --------------------------------------------------------------------
 
-/** Frame rate of animated scenes in the preview. */
-const SCENE_FPS = 30;
+/** Frame rate of animated scenes in the preview; the same setting as on the desktop. */
+let sceneFps = 30;
+/** Scene time `sceneBase` seconds was at `sceneStart`, running at `sceneRate`. */
 let sceneStart = performance.now();
+let sceneBase = 0;
+let sceneRate = 1;
 let sceneLoop = 0;
 let lastSceneFrame = 0;
 
 function sceneTime(): number {
-  return (performance.now() - sceneStart) / 1000;
+  return sceneBase + ((performance.now() - sceneStart) / 1000) * sceneRate;
+}
+
+export function setPreviewFps(fps: number): void {
+  sceneFps = fps;
+}
+
+/** Applies a project's playback speed to the preview, continuing its timeline. */
+function setSpeed(speed: number): void {
+  if (speed !== sceneRate) {
+    sceneBase = sceneTime();
+    sceneStart = performance.now();
+    sceneRate = speed;
+  }
+  media?.setRate(speed);
 }
 
 function stopScene(): void {
@@ -375,9 +397,10 @@ function stopScene(): void {
 function startScene(): void {
   stopScene();
   sceneStart = performance.now();
+  sceneBase = 0;
   const tick = (now: number) => {
     sceneLoop = requestAnimationFrame(tick);
-    if (document.hidden || now - lastSceneFrame < 1000 / SCENE_FPS - 2) return;
+    if (document.hidden || now - lastSceneFrame < 1000 / sceneFps - 2) return;
     lastSceneFrame = now;
     draw();
   };
@@ -422,6 +445,7 @@ export async function showEntry(entry: LibraryEntry, project: Project = entry.pr
       p.setProject(JSON.stringify(project), entry.assetPrefix);
       if (p.isAnimated()) startScene();
       else draw();
+      setSpeed(project.speed ?? 1);
       return;
     }
     if (project.content.type === "video" && entry.assetUrl) {
@@ -441,6 +465,7 @@ export async function showEntry(entry: LibraryEntry, project: Project = entry.pr
       p.retainAssets([]);
       p.setProject(JSON.stringify(project), entry.assetPrefix);
       media = m;
+      setSpeed(project.speed ?? 1);
       m.play();
       draw();
       emitVideo(true);
@@ -467,11 +492,17 @@ export async function showEntry(entry: LibraryEntry, project: Project = entry.pr
   }
 }
 
+/** Whether the shown wallpaper moves (a video or an animated scene). */
+export function previewMoves(): boolean {
+  return media !== null || sceneLoop !== 0;
+}
+
 /** Applies an edit to the project currently shown; its assets are loaded. */
 export function updateProject(entry: LibraryEntry, project: Project): void {
   if (!preview) return;
   try {
     preview.setProject(JSON.stringify(project), entry.assetPrefix);
+    setSpeed(project.speed ?? 1);
     draw();
   } catch {
     void showEntry(entry, project);

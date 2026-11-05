@@ -26,6 +26,8 @@ mod niri;
 #[cfg(any(target_os = "linux", windows))]
 mod restore;
 #[cfg(any(target_os = "linux", windows))]
+mod settings;
+#[cfg(any(target_os = "linux", windows))]
 mod video;
 #[cfg(target_os = "linux")]
 mod wayland;
@@ -158,17 +160,17 @@ fn serve(endpoint: Option<PathBuf>, restore: Option<Option<PathBuf>>) -> anyhow:
         Some(e) => e,
         None => control::default_endpoint()?,
     };
-    let assignments = match restore {
+    let saved = match restore {
         None => Default::default(),
         Some(dir) => {
             let dir = match dir {
                 Some(dir) => dir,
                 None => restore::default_data_dir()?,
             };
-            restore::saved_assignments(&dir)
+            restore::saved(&dir)
         }
     };
-    desktop::run(endpoint, assignments)
+    desktop::run(endpoint, saved)
 }
 
 #[cfg(not(any(target_os = "linux", windows)))]

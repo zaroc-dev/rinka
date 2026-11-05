@@ -14,7 +14,7 @@
 
 use crate::gpu::FrameViews;
 use crate::image::{ImageData, PixelFormat};
-use crate::project::{Content, Fit, Project};
+use crate::project::{ColorAdjust, Content, Fit, Project};
 use crate::scene::GpuScene;
 use crate::video::{ColorMatrix, ColorRange, YuvFrame, yuv_to_rgb};
 
@@ -124,6 +124,32 @@ fn fs_scene(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
         c = sample_source(uv, lod, clamp_sampler);
     }
     return c + bg * (1.0 - c.a);
+}
+"#;
+
+/// Color adjustments of a finished frame (see [`ColorAdjust`]), on its
+/// encoded values.
+const ADJUST_SHADER: &str = r#"
+struct Adjust {
+    r: vec4<f32>,
+    g: vec4<f32>,
+    b: vec4<f32>,
+}
+
+@group(0) @binding(0) var<uniform> m: Adjust;
+@group(0) @binding(1) var frame: texture_2d<f32>;
+
+@vertex
+fn vs_fullscreen(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
+    let uv = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));
+    return vec4<f32>(uv * 2.0 - 1.0, 0.0, 1.0);
+}
+
+@fragment
+fn fs_adjust(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    let c = vec4<f32>(textureLoad(frame, vec2<i32>(pos.xy), 0).rgb, 1.0);
+    let rgb = vec3<f32>(dot(m.r, c), dot(m.g, c), dot(m.b, c));
+    return vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
 }
 "#;
 
@@ -267,7 +293,12 @@ impl VideoTexture {
 
 /// Pipelines and samplers for one render-target format.
 pub struct Renderer {
+    device: wgpu::Device,
+    /// The sRGB render format.
+    format: wgpu::TextureFormat,
     pipeline: wgpu::RenderPipeline,
+    adjust_pipeline: wgpu::RenderPipeline,
+    adjust_layout: wgpu::BindGroupLayout,
     layout: wgpu::BindGroupLayout,
     clamp_sampler: wgpu::Sampler,
     repeat_sampler: wgpu::Sampler,
@@ -405,6 +436,35 @@ impl Renderer {
             target_format,
         );
 
+        let adjust_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("rinka adjust"),
+            source: wgpu::ShaderSource::Wgsl(ADJUST_SHADER.into()),
+        });
+        let adjust_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("rinka adjust"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                texture_entry(1),
+            ],
+        });
+        let adjust_pipeline = fullscreen_pipeline(
+            device,
+            "rinka adjust",
+            &adjust_module,
+            "fs_adjust",
+            &adjust_layout,
+            target_format.remove_srgb_suffix(),
+        );
+
         let mips = MipGenerator::new(device);
         let placeholder = mips.upload(
             device,
@@ -419,7 +479,11 @@ impl Renderer {
         );
         let placeholder_plane = plane_texture(device, 1, 1).create_view(&Default::default());
         Self {
+            device: device.clone(),
+            format: target_format,
             pipeline,
+            adjust_pipeline,
+            adjust_layout,
             layout,
             clamp_sampler: sampler(device, "rinka clamp", wgpu::AddressMode::ClampToEdge),
             repeat_sampler: sampler(device, "rinka repeat", wgpu::AddressMode::Repeat),
@@ -517,6 +581,7 @@ impl Renderer {
             uniform,
             params: Params::default(),
             scene: None,
+            adjust: None,
         };
         target.set_project(device, self, project, source);
         target
@@ -709,9 +774,89 @@ pub struct Target {
     params: Params,
     /// Set for scene projects; drawn instead of the image/video path.
     scene: Option<GpuScene>,
+    /// Set when the project adjusts its colors: the frame is drawn into an
+    /// intermediate texture first.
+    adjust: Option<Adjust>,
+}
+
+struct Adjust {
+    matrix: [[f32; 4]; 3],
+    uniform: wgpu::Buffer,
+    /// The intermediate frame for the current size.
+    frame: Option<AdjustFrame>,
+}
+
+struct AdjustFrame {
+    size: (u32, u32),
+    srgb: wgpu::TextureView,
+    raw: wgpu::TextureView,
+    bind_group: wgpu::BindGroup,
+}
+
+impl Adjust {
+    fn new(device: &wgpu::Device) -> Self {
+        Self {
+            matrix: ColorAdjust::default().matrix(),
+            uniform: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("rinka adjust"),
+                size: 48,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
+            frame: None,
+        }
+    }
+
+    fn frame(&mut self, renderer: &Renderer, size: (u32, u32)) -> &AdjustFrame {
+        if self.frame.as_ref().is_none_or(|f| f.size != size) {
+            let device = &renderer.device;
+            let srgb = renderer.format;
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("rinka adjust frame"),
+                size: wgpu::Extent3d {
+                    width: size.0.max(1),
+                    height: size.1.max(1),
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: srgb.remove_srgb_suffix(),
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[srgb],
+            });
+            let raw = texture.create_view(&Default::default());
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("rinka adjust"),
+                layout: &renderer.adjust_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: self.uniform.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&raw),
+                    },
+                ],
+            });
+            self.frame = Some(AdjustFrame {
+                size,
+                srgb: texture.create_view(&wgpu::TextureViewDescriptor {
+                    format: Some(srgb),
+                    ..Default::default()
+                }),
+                raw,
+                bind_group,
+            });
+        }
+        self.frame.as_ref().expect("just made")
+    }
 }
 
 /// One frame to draw: the target's views, sizes and scene time.
+#[derive(Clone, Copy)]
 pub struct Frame<'a> {
     pub views: &'a FrameViews<'a>,
     /// Render target size in pixels.
@@ -761,6 +906,19 @@ impl Target {
         };
         self.params.source_kind = kind;
         self.params.image_size = [size.0 as f32, size.1 as f32];
+        self.set_adjust(&renderer.device, &project.adjust);
+    }
+
+    /// Changes the color adjustments without rebuilding anything else.
+    pub fn set_adjust(&mut self, device: &wgpu::Device, adjust: &ColorAdjust) {
+        if adjust.is_identity() {
+            self.adjust = None;
+            return;
+        }
+        // Uploaded with the next frame.
+        self.adjust
+            .get_or_insert_with(|| Adjust::new(device))
+            .matrix = adjust.matrix();
     }
 
     /// Shows a scene built for this target (see [`GpuScene::new`]).
@@ -783,6 +941,50 @@ impl Target {
     /// `output_size` the size of the output it represents (equal for
     /// wallpapers; larger for a scaled-down preview).
     pub fn render(
+        &mut self,
+        renderer: &Renderer,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        frame: &Frame<'_>,
+    ) {
+        let Some(mut adjust) = self.adjust.take() else {
+            return self.render_content(renderer, queue, encoder, frame);
+        };
+        queue.write_buffer(&adjust.uniform, 0, bytemuck::cast_slice(&adjust.matrix));
+        let inner = adjust.frame(renderer, frame.size);
+        self.render_content(
+            renderer,
+            queue,
+            encoder,
+            &Frame {
+                views: &FrameViews {
+                    srgb: &inner.srgb,
+                    raw: &inner.raw,
+                },
+                ..*frame
+            },
+        );
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("rinka adjust"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: frame.views.raw,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+        pass.set_pipeline(&renderer.adjust_pipeline);
+        pass.set_bind_group(0, &inner.bind_group, &[]);
+        pass.draw(0..3, 0..1);
+        drop(pass);
+        self.adjust = Some(adjust);
+    }
+
+    fn render_content(
         &mut self,
         renderer: &Renderer,
         queue: &wgpu::Queue,

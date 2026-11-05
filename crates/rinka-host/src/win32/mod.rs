@@ -32,6 +32,8 @@ use crate::clock::SceneClock;
 use crate::control::{self, Command};
 use crate::project_io::{self, ImageCache};
 use crate::protocol::{Error, ErrorCode, Reply, Request};
+use crate::restore::Saved;
+use crate::settings::HostSettings;
 use crate::video::{OwnedFrame, Player};
 
 mod coverage;
@@ -44,9 +46,6 @@ use desktop::Desktop;
 use monitor::Monitor;
 use timer::{WaitableTimer, Wake};
 use ui::{Event, Ui};
-
-/// Frame rate of animated scenes.
-const SCENE_FPS: f64 = 30.0;
 
 /// After the shell destroys a wallpaper window, wait this long before
 /// rebuilding, unless explorer announces its restart sooner.
@@ -76,9 +75,9 @@ fn hinstance() -> HINSTANCE {
     unsafe { GetModuleHandleW(std::ptr::null()) }
 }
 
-/// Runs the host. `assignments` (output name → project directory) are shown
-/// as their outputs appear.
-pub fn run(endpoint: PathBuf, assignments: HashMap<String, PathBuf>) -> anyhow::Result<()> {
+/// Runs the host. Saved assignments (output name → project directory) are
+/// shown as their outputs appear.
+pub fn run(endpoint: PathBuf, saved: Saved) -> anyhow::Result<()> {
     let wake = Arc::new(Wake::new()?);
     let (ui, events) = Ui::start(wake.clone())?;
     let ui = Arc::new(ui);
@@ -94,7 +93,8 @@ pub fn run(endpoint: PathBuf, assignments: HashMap<String, PathBuf>) -> anyhow::
         desktop: Some(Desktop::find()?),
         rebuild_at: None,
         outputs: Vec::new(),
-        assignments,
+        assignments: saved.assignments,
+        settings: saved.settings,
         paused: false,
         stop: false,
     };
@@ -183,6 +183,7 @@ struct Host {
     /// Desired output name -> project directory. Survives disconnection, so a
     /// reconnected monitor gets its wallpaper back.
     assignments: HashMap<String, PathBuf>,
+    settings: HostSettings,
     paused: bool,
     stop: bool,
 }
@@ -282,9 +283,20 @@ impl Host {
                     Some((player, frame)) => (Some(player), Some(frame)),
                     None => (None, None),
                 };
+                let now = Instant::now();
                 if paused && let Some(player) = &mut player {
-                    player.pause(Instant::now());
+                    player.pause(now);
                 }
+                if let Some(player) = &mut player {
+                    player.set_rate(now, prepared.project.speed);
+                }
+                // A reload of the shown project continues its timeline.
+                let mut scene_clock = self.outputs[index]
+                    .wallpaper
+                    .as_ref()
+                    .filter(|w| same_path(&w.project_dir, &prepared.dir))
+                    .map_or_else(|| SceneClock::new(now, paused), |w| w.scene_clock.clone());
+                scene_clock.set_rate(now, prepared.project.speed);
                 let previous = self.outputs[index].wallpaper.replace(Wallpaper {
                     project_dir: prepared.dir,
                     project: prepared.project,
@@ -293,7 +305,7 @@ impl Host {
                     player,
                     video_frame,
                     video_texture: None,
-                    scene_clock: SceneClock::new(Instant::now(), paused),
+                    scene_clock,
                     next_frame: None,
                     dirty: false,
                     shown: false,
@@ -450,7 +462,8 @@ impl Host {
         let draw_start = Instant::now();
         let time = w.scene_clock.time(Instant::now());
         if let Some(next) = &mut w.next_frame {
-            *next = Instant::now() + Duration::from_secs_f64(1.0 / SCENE_FPS);
+            *next =
+                crate::settings::next_frame(*next, Instant::now(), self.settings.scene_interval());
         }
         if (t.setup.config.width, t.setup.config.height) != (width, height) {
             t.setup.resize(width, height);
@@ -801,6 +814,10 @@ impl Host {
                 self.update_playback_state(Instant::now());
                 Ok(Value::Null)
             }
+            Request::Settings { scene_fps } => {
+                self.settings.apply(scene_fps)?;
+                Ok(json!(self.settings))
+            }
             Request::Seek { output, position } => {
                 if !position.is_finite() || position < 0.0 {
                     return Err(Error::new(
@@ -875,6 +892,7 @@ impl Host {
                 "visibility_pause": true,
             },
             "paused": self.paused,
+            "settings": self.settings,
         }))
     }
 

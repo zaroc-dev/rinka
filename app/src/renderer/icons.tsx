@@ -107,3 +107,11 @@ export const InfoIcon = () => (
     <circle cx="10" cy="6.4" r="0.4" fill="currentColor" />
   </Icon>
 );
+
+export const SlidersIcon = () => (
+  <Icon>
+    <path d="M4 6h7M15 6h1M4 14h1M9 14h7" />
+    <circle cx="13" cy="6" r="2" />
+    <circle cx="7" cy="14" r="2" />
+  </Icon>
+);

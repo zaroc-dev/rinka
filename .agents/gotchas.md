@@ -39,6 +39,11 @@ something costs more than a few minutes.
   SwiftShader (device type CPU) without an error. The app passes
   `--disable-gpu-sandbox` when that directory exists; `RINKA_GPU_SANDBOX=1`
   keeps the sandbox. The preview rejects CPU adapters on purpose.
+- **Electron started from inside another Electron app runs as Node.** A
+  terminal under an Electron host (e.g. an IDE) may export
+  `ELECTRON_RUN_AS_NODE=1`; `electron .` then fails with
+  `Cannot read properties of undefined (reading 'getPath')`. Start it with
+  `env -u ELECTRON_RUN_AS_NODE`.
 - **`capturePage` is not the screen.** It waits for the main thread and
   composites on demand, so it can show a frame the user never saw (it hid an
   8.7 s decode stall). Check user-visible behavior with screencopy (`grim`).

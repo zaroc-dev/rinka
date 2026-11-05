@@ -65,10 +65,9 @@ use crate::clock::SceneClock;
 use crate::control::{self, Command};
 use crate::project_io::{self, ImageCache};
 use crate::protocol::{Error, ErrorCode, Reply, Request};
+use crate::restore::Saved;
+use crate::settings::HostSettings;
 use crate::video::{OwnedFrame, Player};
-
-/// Frame rate of animated scenes.
-const SCENE_FPS: f64 = 30.0;
 
 /// A video surface whose frame callback has not arrived for this long is
 /// treated as hidden and its clock pauses.
@@ -77,9 +76,9 @@ const HIDDEN_AFTER: Duration = Duration::from_millis(500);
 /// Fractional scale denominator defined by wp-fractional-scale-v1.
 const SCALE_DENOMINATOR: u32 = 120;
 
-/// Runs the host. `assignments` (output name → project directory) are shown
-/// as their outputs appear.
-pub fn run(endpoint: PathBuf, assignments: HashMap<String, PathBuf>) -> anyhow::Result<()> {
+/// Runs the host. Saved assignments (output name → project directory) are
+/// shown as their outputs appear.
+pub fn run(endpoint: PathBuf, saved: Saved) -> anyhow::Result<()> {
     let conn = Connection::connect_to_env().context("connecting to the Wayland compositor")?;
     let (globals, mut queue) = registry_queue_init(&conn).context("reading Wayland globals")?;
     let qh = queue.handle();
@@ -150,7 +149,8 @@ pub fn run(endpoint: PathBuf, assignments: HashMap<String, PathBuf>) -> anyhow::
         loop_handle: event_loop.handle(),
         video_timer: false,
         outputs: Vec::new(),
-        assignments,
+        assignments: saved.assignments,
+        settings: saved.settings,
         paused: false,
         backdrops: niri.is_some(),
         stop: event_loop.get_signal(),
@@ -234,6 +234,7 @@ struct Host {
     /// Desired output name -> project directory. Survives disconnection, so a
     /// reconnected output gets its wallpaper back.
     assignments: HashMap<String, PathBuf>,
+    settings: HostSettings,
     paused: bool,
     /// Wallpapers get overview backdrop surfaces (under niri).
     backdrops: bool,
@@ -420,6 +421,8 @@ impl Host {
     }
 
     fn create_wallpaper(&self, wl: &wl_output::WlOutput, prepared: Prepared) -> Wallpaper {
+        let mut scene_clock = SceneClock::new(Instant::now(), self.paused);
+        scene_clock.set_rate(Instant::now(), prepared.project.speed);
         // Created first: surfaces on one layer stack in creation order, so
         // without niri's backdrop rule the backdrop stays under the wallpaper.
         let backdrop = self.backdrops.then(|| {
@@ -462,7 +465,7 @@ impl Host {
             image: prepared.image,
             video: None,
             scene: prepared.scene,
-            scene_clock: SceneClock::new(Instant::now(), self.paused),
+            scene_clock,
             next_frame: None,
             player: None,
             video_texture: None,
@@ -488,14 +491,19 @@ impl Host {
             None => self.outputs[index].wallpaper = None,
             Some(prepared) => {
                 let video = prepared.video.clone();
+                let speed = prepared.project.speed;
                 let paused = self.paused;
                 if let Some(w) = &mut self.outputs[index].wallpaper {
+                    // Another project starts from zero; an edit of the shown
+                    // one (a reload) continues its timeline.
+                    let now = Instant::now();
+                    if !same_path(&w.project_dir, &prepared.dir) {
+                        w.scene_clock = SceneClock::new(now, paused);
+                    }
+                    w.scene_clock.set_rate(now, prepared.project.speed);
                     w.project_dir = prepared.dir;
                     w.project = prepared.project;
                     w.image = prepared.image;
-                    if prepared.scene.is_some() || w.scene.is_some() {
-                        w.scene_clock = SceneClock::new(Instant::now(), paused);
-                    }
                     w.scene = prepared.scene;
                     w.dirty = true;
                 } else {
@@ -516,6 +524,7 @@ impl Host {
                             if self.paused {
                                 player.pause(Instant::now());
                             }
+                            player.set_rate(Instant::now(), speed);
                             Some(player)
                         }
                         Err(e) => {
@@ -524,6 +533,9 @@ impl Host {
                         }
                     });
                     w.video = video;
+                }
+                if let Some(player) = &mut w.player {
+                    player.set_rate(Instant::now(), speed);
                 }
                 self.draw(index);
                 self.ensure_video_timer();
@@ -632,7 +644,8 @@ impl Host {
         let draw_start = Instant::now();
         let time = w.scene_clock.time(Instant::now());
         if let Some(next) = &mut w.next_frame {
-            *next = Instant::now() + Duration::from_secs_f64(1.0 / SCENE_FPS);
+            *next =
+                crate::settings::next_frame(*next, Instant::now(), self.settings.scene_interval());
         }
         if w.player.is_some() || w.next_frame.is_some() {
             // Pace animation by the compositor; committed by `present`.
@@ -827,6 +840,7 @@ impl Host {
         let mut next: Option<Duration> = None;
         let mut any = false;
         let paused = self.paused;
+        let interval = self.settings.scene_interval();
         let mut soonest =
             |wait: Duration| next = Some(next.map_or(wait, |n: Duration| n.min(wait)));
         for index in 0..self.outputs.len() {
@@ -847,7 +861,7 @@ impl Host {
                 any = true;
                 if due <= now && w.frame_pending.is_none() {
                     self.draw(index);
-                    soonest(Duration::from_secs_f64(1.0 / SCENE_FPS));
+                    soonest(interval);
                     continue;
                 }
                 soonest(if due > now {
@@ -979,6 +993,10 @@ impl Host {
                 self.ensure_video_timer();
                 Ok(Value::Null)
             }
+            Request::Settings { scene_fps } => {
+                self.settings.apply(scene_fps)?;
+                Ok(json!(self.settings))
+            }
             Request::Seek { output, position } => {
                 let targets = self.target_outputs(output.as_deref())?;
                 let now = Instant::now();
@@ -1046,6 +1064,7 @@ impl Host {
                 "overview_backdrop": self.backdrops,
             },
             "paused": self.paused,
+            "settings": self.settings,
         }))
     }
 
