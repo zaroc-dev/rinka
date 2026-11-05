@@ -14,7 +14,8 @@
 //! - Video is opaque. Audio is not played: wallpapers are muted.
 
 /// Y'CbCr → R'G'B' coefficients.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum ColorMatrix {
     Bt601,
     #[default]

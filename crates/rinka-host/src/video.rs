@@ -285,6 +285,33 @@ pub fn probe(path: &Path) -> anyhow::Result<VideoInfo> {
     Ok(Source::open(path)?.info)
 }
 
+/// Probes a video texture for import: its size, the matrix and range its
+/// frames decode with (as playback will use them) and whether it has sound.
+pub fn probe_texture(bytes: &[u8]) -> anyhow::Result<rinka_import::VideoProbe> {
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!("rinka-probe-{}-{n}.mp4", std::process::id()));
+    std::fs::write(&path, bytes).context("writing the video for probing")?;
+    let result = (|| {
+        let (info, frame) = first_frame(&path)?;
+        let has_audio = ffmpeg::format::input(&path)?
+            .streams()
+            .best(ffmpeg::media::Type::Audio)
+            .is_some();
+        Ok(rinka_import::VideoProbe {
+            info: rinka_engine::project::VideoTextureInfo {
+                width: info.width,
+                height: info.height,
+                matrix: frame.matrix,
+                full_range: frame.range == ColorRange::Full,
+            },
+            has_audio,
+        })
+    })();
+    let _ = std::fs::remove_file(&path);
+    result
+}
+
 /// Decodes the first frame, for thumbnails.
 pub fn first_frame(path: &Path) -> anyhow::Result<(VideoInfo, OwnedFrame)> {
     let mut source = Source::open(path)?;
@@ -682,6 +709,113 @@ impl Player {
         let p = self.position(now)?;
         let (pts, file_pts) = self.shown?;
         Some(file_pts + (p - pts).max(0.0))
+    }
+}
+
+/// Players for a scene's video textures. They follow the scene's clock:
+/// they pause, resume and change speed with it.
+pub struct SceneVideos {
+    videos: Vec<SceneVideo>,
+}
+
+struct SceneVideo {
+    path: String,
+    file: PathBuf,
+    player: Player,
+    /// The newest frame, kept to refill a rebuilt scene.
+    frame: Option<OwnedFrame>,
+    fresh: bool,
+}
+
+impl SceneVideos {
+    /// Opens a player per `(project path, file)`. A video that cannot be
+    /// opened is logged and stays black.
+    pub fn open(files: &[(String, PathBuf)], now: Instant, paused: bool, rate: f64) -> Self {
+        let videos = files
+            .iter()
+            .filter_map(|(path, file)| match Player::open(file) {
+                Ok(mut player) => {
+                    if paused {
+                        player.pause(now);
+                    }
+                    player.set_rate(now, rate);
+                    Some(SceneVideo {
+                        path: path.clone(),
+                        file: file.clone(),
+                        player,
+                        frame: None,
+                        fresh: false,
+                    })
+                }
+                Err(e) => {
+                    log::error!("{}: {e:#}", file.display());
+                    None
+                }
+            })
+            .collect();
+        Self { videos }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.videos.is_empty()
+    }
+
+    /// Whether these players play exactly `files`.
+    pub fn plays(&self, files: &[(String, PathBuf)]) -> bool {
+        self.videos.len() == files.len()
+            && self
+                .videos
+                .iter()
+                .zip(files)
+                .all(|(v, (path, file))| &v.path == path && &v.file == file)
+    }
+
+    pub fn pause(&mut self, now: Instant) {
+        for v in &mut self.videos {
+            v.player.pause(now);
+        }
+    }
+
+    pub fn resume(&mut self, now: Instant) {
+        for v in &mut self.videos {
+            v.player.resume(now);
+        }
+    }
+
+    pub fn set_rate(&mut self, now: Instant, rate: f64) {
+        for v in &mut self.videos {
+            v.player.set_rate(now, rate);
+        }
+    }
+
+    /// Takes the newest due frame of each video.
+    pub fn poll(&mut self, now: Instant) {
+        for v in &mut self.videos {
+            if let (Some(frame), _) = v.player.poll(now) {
+                v.frame = Some(frame);
+                v.fresh = true;
+            }
+        }
+    }
+
+    /// Uploads new frames into `scene`, or every kept frame when the scene
+    /// was rebuilt (its video textures start black).
+    pub fn upload(
+        &mut self,
+        scene: &mut rinka_engine::GpuScene,
+        device: &wgpu::Device,
+        renderer: &rinka_engine::Renderer,
+        queue: &wgpu::Queue,
+        rebuilt: bool,
+    ) {
+        for v in &mut self.videos {
+            if let Some(frame) = &v.frame
+                && (v.fresh || rebuilt)
+            {
+                scene.upload_video(device, renderer, queue, &v.path, &frame.as_yuv());
+                v.fresh = false;
+            }
+        }
     }
 }
 

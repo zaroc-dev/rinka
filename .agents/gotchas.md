@@ -284,6 +284,13 @@ something costs more than a few minutes.
   GPL-3.0 (linux-wallpaperengine).** Read them for defaults, do not copy
   code.
 
+- **A `.tex` can be an MP4 with a sound track.** Vera Garnet's 4K60 H.264
+  texture carries AAC audio; the import reports the layer partial until
+  sound plays rather than dropping it silently.
+- **Video textures have no mipmaps.** Drawn much smaller than their size
+  (a 4K video in a 480-px thumbnail) they alias: mean error 3.1/255 against
+  FFmpeg's area scaling, 0.1/255 at full size.
+
 ## Editor UI
 
 - **`position: fixed` inside a transformed ancestor** is positioned relative

@@ -67,7 +67,7 @@ use crate::project_io::{self, ImageCache};
 use crate::protocol::{Error, ErrorCode, Reply, Request};
 use crate::restore::Saved;
 use crate::settings::HostSettings;
-use crate::video::{OwnedFrame, Player};
+use crate::video::{OwnedFrame, Player, SceneVideos};
 
 /// A video surface whose frame callback has not arrived for this long is
 /// treated as hidden and its clock pauses.
@@ -257,6 +257,8 @@ struct Wallpaper {
     scene: Option<std::sync::Arc<rinka_engine::SceneAssets>>,
     /// The scene's clock; it stops while animation is paused.
     scene_clock: SceneClock,
+    /// Players of the scene's video textures, on the scene's clock.
+    scene_videos: SceneVideos,
     /// The scene animates and the next frame is due at this instant.
     next_frame: Option<Instant>,
     player: Option<Player>,
@@ -330,6 +332,8 @@ struct Prepared {
     image: Option<PathBuf>,
     video: Option<PathBuf>,
     scene: Option<std::sync::Arc<rinka_engine::SceneAssets>>,
+    /// The scene's video textures: project path and file.
+    scene_videos: Vec<(String, PathBuf)>,
 }
 
 impl Drop for Wallpaper {
@@ -386,12 +390,19 @@ impl Host {
             })?;
         }
         let scene = project_io::scene_assets(dir, &project)?.map(std::sync::Arc::new);
+        let scene_videos = project_io::scene_videos(dir, &project)?;
+        for (_, path) in &scene_videos {
+            crate::video::probe(path).map_err(|e| {
+                Error::new(ErrorCode::Project, format!("{}: {e:#}", path.display()))
+            })?;
+        }
         Ok(Prepared {
             dir: dir.to_owned(),
             project,
             image,
             video,
             scene,
+            scene_videos,
         })
     }
 
@@ -421,8 +432,15 @@ impl Host {
     }
 
     fn create_wallpaper(&self, wl: &wl_output::WlOutput, prepared: Prepared) -> Wallpaper {
-        let mut scene_clock = SceneClock::new(Instant::now(), self.paused);
-        scene_clock.set_rate(Instant::now(), prepared.project.speed);
+        let now = Instant::now();
+        let mut scene_clock = SceneClock::new(now, self.paused);
+        scene_clock.set_rate(now, prepared.project.speed);
+        let scene_videos = SceneVideos::open(
+            &prepared.scene_videos,
+            now,
+            self.paused,
+            prepared.project.speed,
+        );
         // Created first: surfaces on one layer stack in creation order, so
         // without niri's backdrop rule the backdrop stays under the wallpaper.
         let backdrop = self.backdrops.then(|| {
@@ -466,6 +484,7 @@ impl Host {
             video: None,
             scene: prepared.scene,
             scene_clock,
+            scene_videos,
             next_frame: None,
             player: None,
             video_texture: None,
@@ -497,10 +516,21 @@ impl Host {
                     // Another project starts from zero; an edit of the shown
                     // one (a reload) continues its timeline.
                     let now = Instant::now();
-                    if !same_path(&w.project_dir, &prepared.dir) {
+                    let same = same_path(&w.project_dir, &prepared.dir);
+                    if !same {
                         w.scene_clock = SceneClock::new(now, paused);
                     }
                     w.scene_clock.set_rate(now, prepared.project.speed);
+                    if same && w.scene_videos.plays(&prepared.scene_videos) {
+                        w.scene_videos.set_rate(now, prepared.project.speed);
+                    } else {
+                        w.scene_videos = SceneVideos::open(
+                            &prepared.scene_videos,
+                            now,
+                            paused,
+                            prepared.project.speed,
+                        );
+                    }
                     w.project_dir = prepared.dir;
                     w.project = prepared.project;
                     w.image = prepared.image;
@@ -608,6 +638,7 @@ impl Host {
             video.upload(&gpu.queue, &yuv);
             t.target.set_video_color(video.matrix, video.range);
         }
+        let rebuilt = w.dirty;
         if w.dirty {
             let image = w
                 .image
@@ -640,6 +671,13 @@ impl Host {
             if let Some(b) = &mut w.backdrop {
                 b.drawn_for = None;
             }
+        }
+        if !w.scene_videos.is_empty()
+            && let Some(scene) = t.target.scene_mut()
+        {
+            w.scene_videos.poll(Instant::now());
+            w.scene_videos
+                .upload(scene, &gpu.device, renderer, &gpu.queue, rebuilt);
         }
         let draw_start = Instant::now();
         let time = w.scene_clock.time(Instant::now());
@@ -973,6 +1011,7 @@ impl Host {
                 }
                 for w in self.outputs.iter_mut().filter_map(|s| s.wallpaper.as_mut()) {
                     w.scene_clock.pause(now);
+                    w.scene_videos.pause(now);
                 }
                 Ok(Value::Null)
             }
@@ -989,6 +1028,7 @@ impl Host {
                 }
                 for w in self.outputs.iter_mut().filter_map(|s| s.wallpaper.as_mut()) {
                     w.scene_clock.resume(now);
+                    w.scene_videos.resume(now);
                 }
                 self.ensure_video_timer();
                 Ok(Value::Null)

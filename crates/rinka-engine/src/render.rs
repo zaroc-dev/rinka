@@ -215,6 +215,16 @@ impl GpuImage {
         &self.view
     }
 
+    /// An image for a texture the engine renders into itself.
+    pub(crate) fn from_view(view: wgpu::TextureView, width: u32, height: u32) -> Self {
+        Self {
+            view,
+            width,
+            height,
+            texture_size: (width, height),
+        }
+    }
+
     /// Size of the texture itself, in texels.
     pub fn texture_width(&self) -> u32 {
         self.texture_size.0
@@ -273,6 +283,10 @@ impl VideoTexture {
         }
         self.matrix = frame.matrix;
         self.range = frame.range;
+    }
+
+    pub(crate) fn views(&self) -> &[wgpu::TextureView; 3] {
+        &self.views
     }
 
     /// Whether `frame` has this texture's plane sizes.
@@ -924,6 +938,11 @@ impl Target {
     /// Shows a scene built for this target (see [`GpuScene::new`]).
     pub fn set_scene(&mut self, scene: Option<GpuScene>) {
         self.scene = scene;
+    }
+
+    /// The scene shown, for uploading its video frames.
+    pub fn scene_mut(&mut self) -> Option<&mut GpuScene> {
+        self.scene.as_mut()
     }
 
     /// Whether frames change over time, so hosts must keep drawing.

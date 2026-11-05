@@ -387,11 +387,63 @@ function setSpeed(speed: number): void {
     sceneRate = speed;
   }
   media?.setRate(speed);
+  for (const v of sceneVideos) v.setRate(speed);
 }
+
+/** Players of the shown scene's video textures. */
+let sceneVideos: Mp4Player[] = [];
 
 function stopScene(): void {
   cancelAnimationFrame(sceneLoop);
   sceneLoop = 0;
+  for (const v of sceneVideos) v.close();
+  sceneVideos = [];
+}
+
+/**
+ * Plays a scene's video textures into the engine. Their frames are drawn
+ * with the scene loop; the project's matrix and range convert them.
+ */
+async function playSceneVideos(entry: LibraryEntry, project: Project, p: Preview, token: number): Promise<void> {
+  if (project.content.type !== "scene") return;
+  const paths = Object.entries(project.content.textures).flatMap(([path, t]) => (t.video ? [path] : []));
+  const players = await Promise.all(
+    paths.map((path) =>
+      Mp4Player.open(
+        `rinka://app/library/${entry.id}/${path}`,
+        null,
+        (f) =>
+          p.uploadSceneVideoFrame(
+            path,
+            f.width,
+            f.height,
+            f.chromaWidth,
+            f.chromaHeight,
+            f.data,
+            f.offsets[0],
+            f.strides[0],
+            f.offsets[1],
+            f.strides[1],
+            f.offsets[2],
+            f.strides[2],
+          ),
+        (e) => console.error(`preview scene video ${path}:`, e),
+      ).catch((e: Error) => {
+        console.error(`preview scene video ${path}:`, e.message);
+        return null;
+      }),
+    ),
+  );
+  const opened = players.filter((v): v is Mp4Player => v !== null);
+  if (token !== generation) {
+    for (const v of opened) v.close();
+    return;
+  }
+  sceneVideos = opened;
+  for (const v of opened) {
+    v.setRate(sceneRate);
+    v.play();
+  }
 }
 
 function startScene(): void {
@@ -415,7 +467,7 @@ async function loadScene(entry: LibraryEntry, project: Project, p: Preview, toke
   const texts = await Promise.all(shaders.map(async (path) => [path, await (await fetch(base + path)).text()] as const));
   const meshPaths = [...new Set(project.content.layers.flatMap((l) => (l.mesh ? [l.mesh.source] : [])))];
   const meshes = await Promise.all(meshPaths.map(async (path) => [path, await (await fetch(base + path)).text()] as const));
-  const textures = Object.keys(project.content.textures);
+  const textures = Object.entries(project.content.textures).flatMap(([path, t]) => (t.video ? [] : [path]));
   const decoded = await Promise.all(
     textures.map(async (path) => {
       const bytes = await (await fetch(base + path)).arrayBuffer();
@@ -446,6 +498,7 @@ export async function showEntry(entry: LibraryEntry, project: Project = entry.pr
       if (p.isAnimated()) startScene();
       else draw();
       setSpeed(project.speed ?? 1);
+      await playSceneVideos(entry, project, p, token);
       return;
     }
     if (project.content.type === "video" && entry.assetUrl) {

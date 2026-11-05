@@ -492,6 +492,33 @@ pub struct TextureInfo {
     /// Nearest-neighbor sampling.
     #[serde(default)]
     pub nearest: bool,
+    /// The texture is a looping video file instead of an image.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video: Option<VideoTextureInfo>,
+}
+
+/// A video used as a scene texture. It plays on the scene's clock: it
+/// pauses and changes speed with the scene. Its frames are converted to
+/// encoded R'G'B' with this matrix and range, which the importer probed
+/// natively, so the preview does not depend on the browser's metadata.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VideoTextureInfo {
+    pub width: u32,
+    pub height: u32,
+    pub matrix: crate::ColorMatrix,
+    #[serde(default)]
+    pub full_range: bool,
+}
+
+impl VideoTextureInfo {
+    pub fn range(&self) -> crate::ColorRange {
+        if self.full_range {
+            crate::ColorRange::Full
+        } else {
+            crate::ColorRange::Limited
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

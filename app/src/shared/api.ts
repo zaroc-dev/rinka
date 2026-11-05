@@ -23,7 +23,7 @@ export interface SceneContent {
     /** Mesh asset (`rinka.mesh`) the layer is drawn through. */
     mesh?: { source: string };
   }[];
-  textures: Record<string, { clamp?: boolean; nearest?: boolean }>;
+  textures: Record<string, { clamp?: boolean; nearest?: boolean; video?: { width: number; height: number } }>;
   shaders: Record<string, { vertex: string; fragment: string }>;
 }
 

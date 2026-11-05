@@ -8,6 +8,7 @@ use rinka_engine::mesh::MeshAnimation;
 use rinka_engine::project::{
     ColorBlend, Content, Effect, EffectPass, Fit, Layer, LayerAttach, LayerBlend, LayerMesh,
     Project, Provenance, SceneColorSpace, SceneContent, ShaderInfo, TextureInfo, UniformInfo,
+    VideoTextureInfo,
 };
 use serde_json::Value;
 
@@ -25,6 +26,19 @@ pub struct Options {
     pub builtin_assets: Option<PathBuf>,
     /// Write a project even when some features are lost.
     pub allow_partial: bool,
+    /// Reads a video file's stream properties. Without it, video textures
+    /// are unsupported: the engine needs their size, matrix and range.
+    pub probe_video: Option<ProbeVideo>,
+}
+
+/// Probes an MP4 file's bytes.
+pub type ProbeVideo = fn(&[u8]) -> anyhow::Result<VideoProbe>;
+
+/// What import needs to know about a video texture.
+#[derive(Clone, Copy, Debug)]
+pub struct VideoProbe {
+    pub info: VideoTextureInfo,
+    pub has_audio: bool,
 }
 
 /// A converted project before it is written.
@@ -247,6 +261,9 @@ struct SceneBuilder {
     /// Source texture path → project path.
     texture_paths: HashMap<String, String>,
     translations: HashMap<String, Result<String, String>>,
+    probe_video: Option<ProbeVideo>,
+    /// Project paths of video textures with a sound track.
+    videos_with_audio: HashSet<String>,
 }
 
 /// An object's `colorBlendMode` (Wallpaper Engine's `BLENDMODE` numbers):
@@ -369,6 +386,8 @@ fn convert_scene(
         shaders: BTreeMap::new(),
         texture_paths: HashMap::new(),
         translations: HashMap::new(),
+        probe_video: options.probe_video,
+        videos_with_audio: HashSet::new(),
     };
 
     // Canvas and global features.
@@ -650,8 +669,13 @@ impl SceneBuilder {
             .read(&path, effect_dir)
             .ok_or_else(|| format!("texture {name} not found"))?;
         let t = tex::decode(&bytes).map_err(|e| format!("texture {name}: {e}"))?;
-        if t.video.is_some() {
-            return Err(format!("texture {name} is a video"));
+        if let Some(video) = t.video {
+            if particle {
+                return Err(format!(
+                    "texture {name} is a video; particle sprites cannot be videos yet"
+                ));
+            }
+            return self.store_video(&key, name, video, t.flags);
         }
         let mut image = t
             .images
@@ -675,6 +699,54 @@ impl SceneBuilder {
             tex::as_particle_sprite(t.format, &mut image);
         }
         self.store(&key, name, &image, flags)
+    }
+
+    /// Keeps a video texture's MP4 as an asset and returns its project path.
+    fn store_video(
+        &mut self,
+        key: &str,
+        name: &str,
+        video: Vec<u8>,
+        flags: u32,
+    ) -> Result<String, String> {
+        let probe = self.probe_video.ok_or_else(|| {
+            format!("texture {name} is a video, and this build cannot read video")
+        })?;
+        let probed = probe(&video)
+            .map_err(|e| format!("texture {name} is a video that cannot be read: {e:#}"))?;
+        let stem = sanitize(
+            name.trim_end_matches(".tex")
+                .rsplit('/')
+                .next()
+                .unwrap_or(name),
+        );
+        let project_path = format!("textures/{stem}-{}.mp4", short_hash(&key));
+        self.files.insert(project_path.clone(), video);
+        if probed.has_audio {
+            self.videos_with_audio.insert(project_path.clone());
+        }
+        self.textures.insert(
+            project_path.clone(),
+            TextureInfo {
+                clamp: flags & tex::FLAG_CLAMP_UVS != 0,
+                nearest: flags & tex::FLAG_NO_INTERPOLATION != 0,
+                video: Some(probed.info),
+            },
+        );
+        self.texture_paths
+            .insert(key.to_owned(), project_path.clone());
+        Ok(project_path)
+    }
+
+    /// Notes what a layer showing video texture `path` loses.
+    fn note_video(&self, path: &str, item: &mut Item) {
+        if self.textures.get(path).is_some_and(|t| t.video.is_some()) {
+            item.notes
+                .push("plays its video texture looped, on the scene's clock".into());
+            if self.videos_with_audio.contains(path) {
+                item.partial("the video texture's sound is not played yet");
+            }
+        }
     }
 
     /// Writes a decoded texture as a PNG asset and returns its project path.
@@ -711,6 +783,7 @@ impl SceneBuilder {
             TextureInfo {
                 clamp: flags & tex::FLAG_CLAMP_UVS != 0,
                 nearest: flags & tex::FLAG_NO_INTERPOLATION != 0,
+                video: None,
             },
         );
         self.texture_paths
@@ -772,6 +845,7 @@ impl SceneBuilder {
                 TextureInfo {
                     clamp: true,
                     nearest: false,
+                    video: None,
                 },
             );
         }
@@ -1119,6 +1193,7 @@ impl SceneBuilder {
                 return None;
             }
         };
+        self.note_video(&texture, item);
 
         let size = obj
             .get("size")
@@ -1128,6 +1203,10 @@ impl SceneBuilder {
                     model.get("width")?.as_f64()? as f32,
                     model.get("height")?.as_f64()? as f32,
                 ])
+            })
+            .or_else(|| {
+                let v = self.textures.get(&texture)?.video?;
+                Some([v.width as f32, v.height as f32])
             })
             .or_else(|| {
                 let png = self.files.get(&texture)?;

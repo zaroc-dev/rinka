@@ -121,6 +121,7 @@ fn translated_effect_runs_on_a_layer() {
                 TextureInfo {
                     clamp: true,
                     nearest: true,
+                    video: None,
                 },
             ),
             (
@@ -128,6 +129,7 @@ fn translated_effect_runs_on_a_layer() {
                 TextureInfo {
                     clamp: true,
                     nearest: true,
+                    video: None,
                 },
             ),
         ]),

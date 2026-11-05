@@ -50,7 +50,9 @@ A project is a directory with `project.json` and its assets:
 - `scene`: canvas `width`/`height`, `fit`, `clear_color`, `color_space: gamma`,
   `layers` (bottom to top: texture, origin (center, y down), size, scale,
   angle (clockwise, radians), color, alpha, brightness, blend, optional
-  `color_blend`, effects, optional `particles`), `textures` (path → clamp/nearest), `shaders` (id →
+  `color_blend`, effects, optional `particles`), `textures` (path →
+  clamp/nearest, and for video textures `video: {width, height, matrix,
+  full_range}`, probed at import), `shaders` (id →
   WGSL vertex/fragment paths, reflected uniform layout, texture slots).
 - A layer with `mesh` draws its texture through a triangle mesh
   (`mesh.rs`): `{source, animations}`, where `source` is a `rinka.mesh`
@@ -93,6 +95,12 @@ holds `{version: 1, assignments: {output: projectId}}`; the library is
   `Source` (image or YUV); `set_scene` attaches a `GpuScene`; `render(&Frame)`.
 - `Frame`: `FrameViews { srgb, raw }` of the same texture, render size,
   output size (larger than the target for the scaled-down preview), scene time.
+- Video textures (`TextureInfo::video`): an `Rgba8Unorm` texture that
+  layers and effect slots sample like an image. Hosts hand the newest
+  frame's planes to `GpuScene::upload_video`; the next render converts them
+  into the texture with the project's matrix and range (`VIDEO_SHADER`),
+  storing encoded R'G'B' as gamma scenes compose it. No mipmaps; black (and
+  transparent) until the first frame.
 - Color adjustments (`project.adjust`): when not neutral, `Target::render`
   draws the content into an intermediate texture of the frame's format and
   a full-frame pass maps its encoded RGB through one affine matrix
@@ -150,6 +158,10 @@ holds `{version: 1, assignments: {output: projectId}}`; the library is
   from the editor, default 30) through the same timer. The next frame is due
   one interval after the previous due time, not after the draw, so the rate
   holds; a frame more than an interval late restarts the cadence.
+- Scene video textures play through `SceneVideos` (`video.rs`): one
+  `Player` per video, paused, resumed and sped up with the scene clock.
+  Each scene draw polls them and uploads new frames; a rebuilt scene gets
+  the kept frames again. Thumbnails show each video's first frame.
 - Project speed scales the scene clock (`clock.rs`) and the video player's
   timeline. A reload of the shown project keeps both timelines and only
   changes the rate.
@@ -246,7 +258,10 @@ continue from there on `resume`. Assignments made while paused start paused.
 4. Convert objects. Image layers go through model → material
    (`genericimage*`), with parent transforms composed and y flipped. Solid
    layers (`flat`) become a white 1×1 texture tinted with the object's
-   color. Particle objects become one particle layer per system plus static
+   color. A texture holding an MP4 is kept as `textures/<name>.mp4` and
+   probed with the host's FFmpeg (`Options::probe_video`) for size, matrix,
+   range and sound; a sound track makes the layer partial until sound
+   plays. Particle objects become one particle layer per system plus static
    children (`rinka-import/src/particles.rs`, sources in
    `docs/m4-particles.md`). Text, sound, models, lights and composition
    layers are reported unsupported.

@@ -22,7 +22,8 @@ use crate::image::ImageData;
 use crate::mesh::{Mesh, MeshPlayer};
 use crate::particles::{Simulation, Sprite, sprite_quad};
 use crate::project::{Fit, LayerBlend, SceneContent, ShaderInfo, UniformInfo};
-use crate::render::{GpuImage, Renderer};
+use crate::render::{GpuImage, Renderer, VideoTexture};
+use crate::video::{YuvFrame, yuv_to_rgb};
 
 /// Longest side of a layer's offscreen effect buffers.
 const MAX_EFFECT_SIZE: u32 = 4096;
@@ -221,6 +222,49 @@ fn fs_blend(in: VsOut) -> @location(0) vec4<f32> {
 }
 "#;
 
+/// A video frame's Y'CbCr planes into the encoded RGB texture layers sample
+/// (video textures). Gamma scenes compose encoded values, so the R'G'B'
+/// result is stored as it is.
+const VIDEO_SHADER: &str = r#"
+struct Yuv {
+    r: vec4<f32>,
+    g: vec4<f32>,
+    b: vec4<f32>,
+}
+
+@group(0) @binding(0) var<uniform> m: Yuv;
+@group(0) @binding(1) var plane_y: texture_2d<f32>;
+@group(0) @binding(2) var plane_u: texture_2d<f32>;
+@group(0) @binding(3) var plane_v: texture_2d<f32>;
+@group(0) @binding(4) var plane_sampler: sampler;
+
+struct VsOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+}
+
+@vertex
+fn vs_full(@builtin(vertex_index) i: u32) -> VsOut {
+    let uv = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));
+    var out: VsOut;
+    out.pos = vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0);
+    out.uv = uv;
+    return out;
+}
+
+@fragment
+fn fs_video(in: VsOut) -> @location(0) vec4<f32> {
+    let yuv = vec4<f32>(
+        textureSampleLevel(plane_y, plane_sampler, in.uv, 0.0).r,
+        textureSampleLevel(plane_u, plane_sampler, in.uv, 0.0).r,
+        textureSampleLevel(plane_v, plane_sampler, in.uv, 0.0).r,
+        1.0,
+    );
+    let rgb = vec3<f32>(dot(m.r, yuv), dot(m.g, yuv), dot(m.b, yuv));
+    return vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
+}
+"#;
+
 /// The composed scene onto the frame (scenes with color-blended layers).
 const BLIT_SHADER: &str = r#"
 @group(0) @binding(0) var composed: texture_2d<f32>;
@@ -313,6 +357,76 @@ struct Texture {
     nearest: bool,
 }
 
+/// A video texture: the encoded RGB texture layers sample, and the planes of
+/// the newest frame, converted into it on the next render.
+struct SceneVideo {
+    path: String,
+    target: wgpu::TextureView,
+    yuv: wgpu::Buffer,
+    planes: Option<(VideoTexture, wgpu::BindGroup)>,
+    pending: bool,
+}
+
+struct VideoConvert {
+    pipeline: wgpu::RenderPipeline,
+    layout: wgpu::BindGroupLayout,
+    sampler: wgpu::Sampler,
+}
+
+impl VideoConvert {
+    fn new(device: &wgpu::Device) -> Self {
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("rinka scene video"),
+            source: wgpu::ShaderSource::Wgsl(VIDEO_SHADER.into()),
+        });
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("rinka scene video"),
+            entries: &[
+                uniform_entry(0, wgpu::ShaderStages::FRAGMENT),
+                texture_entry(1, wgpu::ShaderStages::FRAGMENT),
+                texture_entry(2, wgpu::ShaderStages::FRAGMENT),
+                texture_entry(3, wgpu::ShaderStages::FRAGMENT),
+                sampler_entry(4, wgpu::ShaderStages::FRAGMENT),
+            ],
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("rinka scene video"),
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
+        });
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("rinka scene video"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &module,
+                entry_point: Some("vs_full"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: Default::default(),
+            depth_stencil: None,
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &module,
+                entry_point: Some("fs_video"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: EFFECT_FORMAT,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        Self {
+            pipeline,
+            layout,
+            sampler: sampler_for(device, true, false),
+        }
+    }
+}
+
 struct Pass {
     pipeline: wgpu::RenderPipeline,
     bind_group: wgpu::BindGroup,
@@ -370,6 +484,9 @@ struct ParticleGpu {
 
 pub struct GpuScene {
     content: SceneContent,
+    /// Video textures, updated by the host with [`GpuScene::upload_video`].
+    videos: Vec<SceneVideo>,
+    convert: Option<VideoConvert>,
     layers: Vec<LayerGpu>,
     /// Per layer: the mesh layer and attachment point it follows.
     attached: Vec<Option<(usize, usize)>>,
@@ -874,7 +991,59 @@ impl GpuScene {
             particle_pipelines(device, target_format.remove_srgb_suffix(), &particle_layout);
 
         let mut textures: HashMap<&str, Texture> = HashMap::new();
+        let mut videos = Vec::new();
         for (path, info) in &content.textures {
+            if let Some(v) = &info.video {
+                // Black until the first frame arrives. Larger videos are
+                // scaled into the effect-buffer limit.
+                let (tw, th) = (
+                    v.width.clamp(1, MAX_EFFECT_SIZE),
+                    v.height.clamp(1, MAX_EFFECT_SIZE),
+                );
+                let texture = device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("rinka scene video"),
+                    size: wgpu::Extent3d {
+                        width: tw,
+                        height: th,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: EFFECT_FORMAT,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                        | wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                });
+                let view = texture.create_view(&Default::default());
+                let yuv = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("rinka scene video"),
+                    size: 48,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                queue.write_buffer(
+                    &yuv,
+                    0,
+                    bytemuck::cast_slice(&yuv_to_rgb(v.matrix, v.range())),
+                );
+                videos.push(SceneVideo {
+                    path: path.clone(),
+                    target: view.clone(),
+                    yuv,
+                    planes: None,
+                    pending: false,
+                });
+                textures.insert(
+                    path,
+                    Texture {
+                        image: GpuImage::from_view(view, tw, th),
+                        clamp: info.clamp,
+                        nearest: info.nearest,
+                    },
+                );
+                continue;
+            }
             let data = assets
                 .textures
                 .get(path)
@@ -1126,6 +1295,8 @@ impl GpuScene {
             .then(|| BlendCanvas::new(device, target_format.remove_srgb_suffix(), &layer_layout));
         Ok(Self {
             content: content.clone(),
+            convert: (!videos.is_empty()).then(|| VideoConvert::new(device)),
+            videos,
             covers: vec![None; layers.len()],
             canvas,
             layers,
@@ -1148,6 +1319,31 @@ impl GpuScene {
         output_size: (u32, u32),
         time: f64,
     ) {
+        // New video frames into their textures.
+        if let Some(convert) = &self.convert {
+            for video in self.videos.iter_mut().filter(|v| v.pending) {
+                let Some((_, group)) = &video.planes else {
+                    continue;
+                };
+                let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("rinka scene video"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &video.target,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    ..Default::default()
+                });
+                rp.set_pipeline(&convert.pipeline);
+                rp.set_bind_group(0, group, &[]);
+                rp.draw(0..3, 0..1);
+                video.pending = false;
+            }
+        }
         // Effects first, each into its own offscreen buffers.
         let quads = || {
             self.layers.iter().filter_map(|l| match l {
@@ -1493,14 +1689,73 @@ impl GpuScene {
         }
     }
 
-    /// Whether frames change over time (effects or particles animate).
+    /// Project paths of the scene's video textures.
+    pub fn videos(&self) -> impl Iterator<Item = &str> {
+        self.videos.iter().map(|v| v.path.as_str())
+    }
+
+    /// Sets the frame video texture `path` shows from the next render on.
+    /// Frames of any size fill the texture. Unknown paths are ignored.
+    pub fn upload_video(
+        &mut self,
+        device: &wgpu::Device,
+        renderer: &Renderer,
+        queue: &wgpu::Queue,
+        path: &str,
+        frame: &YuvFrame<'_>,
+    ) {
+        let (Some(video), Some(convert)) = (
+            self.videos.iter_mut().find(|v| v.path == path),
+            &self.convert,
+        ) else {
+            return;
+        };
+        if video.planes.as_ref().is_none_or(|(p, _)| !p.fits(frame)) {
+            let planes = renderer.create_video_texture(device, frame);
+            let views = planes.views();
+            let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("rinka scene video"),
+                layout: &convert.layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: video.yuv.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&views[0]),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::TextureView(&views[1]),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::TextureView(&views[2]),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: wgpu::BindingResource::Sampler(&convert.sampler),
+                    },
+                ],
+            });
+            video.planes = Some((planes, group));
+        }
+        let (planes, _) = video.planes.as_mut().expect("planes");
+        planes.upload(queue, frame);
+        video.pending = true;
+    }
+
+    /// Whether frames change over time (effects, particles or videos
+    /// animate).
     pub fn animated(&self) -> bool {
-        self.layers.iter().any(|l| match l {
-            LayerGpu::Quad(q) => {
-                !q.passes.is_empty() || q.mesh.as_ref().is_some_and(|m| m.animated)
-            }
-            LayerGpu::Particles(_) => true,
-        })
+        !self.videos.is_empty()
+            || self.layers.iter().any(|l| match l {
+                LayerGpu::Quad(q) => {
+                    !q.passes.is_empty() || q.mesh.as_ref().is_some_and(|m| m.animated)
+                }
+                LayerGpu::Particles(_) => true,
+            })
     }
 }
 

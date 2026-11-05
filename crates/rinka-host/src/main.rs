@@ -134,6 +134,7 @@ fn main() -> anyhow::Result<()> {
             let options = rinka_import::Options {
                 builtin_assets: assets.or_else(default_we_assets),
                 allow_partial,
+                probe_video: probe_video(),
             };
             let report = rinka_import::import(&item, out.as_deref(), &options)?;
             println!("{}", serde_json::to_string_pretty(&report)?);
@@ -224,6 +225,16 @@ fn video_timing(file: &std::path::Path, seconds: f64) -> anyhow::Result<()> {
     }
     println!("frames {shown}, worst timing error {worst:.1} ms");
     Ok(())
+}
+
+#[cfg(any(target_os = "linux", windows))]
+fn probe_video() -> Option<rinka_import::ProbeVideo> {
+    Some(video::probe_texture)
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
+fn probe_video() -> Option<rinka_import::ProbeVideo> {
+    None
 }
 
 /// Wallpaper Engine's built-in assets in the default Steam library.

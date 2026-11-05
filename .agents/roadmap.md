@@ -49,7 +49,7 @@ unexplained mismatch on validated scenes.
 | Untranslatable shaders | 9 | 13 pairs; e.g. HLSL implicit truncation |
 | Text | 7 | 37 layers |
 | Camera parallax, bloom | 6 each | Scene-level settings |
-| Video textures on layers | 2 | MP4 inside `.tex`; was decoded as noise before 2026-10-14 |
+| Video textures on layers | 0 | Done 2026-11-05; Vera Garnet's is partial until its sound plays |
 | Composition layers (effects on everything below) | 4 | |
 | Color blend modes on layers | 1 left | Done on image and solid layers (2026-10-15); left: one text layer (with text) |
 | Effects on solid layers | 2 | Such layers import hidden (audio bars, a tint) |
@@ -80,9 +80,9 @@ speed and color adjustments, host-wide scene frame rate 15/30.
 
 ## Next, in order
 
-1. **Video textures on layers** (Vera Garnet: one full-screen MP4 inside a
-   `.tex` plus lightning particles) and **sound playback** (#16): 2 and 13
-   scenes. Video first: Vera Garnet's only blocker.
+1. **Sound playback** (#16): 13 scenes, and the last thing Vera Garnet
+   lacks (its video texture has a sound track). Video textures landed on
+   2026-11-05 (`docs/m4-scene-video.md`).
 2. **Particle follow-ups**: control points (cursor attraction), per-particle
    child systems, perspective particles, rope renderers.
 3. **Text layers**: 7 scenes; Moon Touch's remaining difference.

@@ -34,7 +34,7 @@ use crate::project_io::{self, ImageCache};
 use crate::protocol::{Error, ErrorCode, Reply, Request};
 use crate::restore::Saved;
 use crate::settings::HostSettings;
-use crate::video::{OwnedFrame, Player};
+use crate::video::{OwnedFrame, Player, SceneVideos};
 
 mod coverage;
 mod desktop;
@@ -208,6 +208,8 @@ struct Wallpaper {
     video_texture: Option<VideoTexture>,
     /// The scene's clock; it stops while animation is paused.
     scene_clock: SceneClock,
+    /// Players of the scene's video textures, on the scene's clock.
+    scene_videos: SceneVideos,
     /// The scene animates and the next frame is due at this instant.
     next_frame: Option<Instant>,
     /// The project changed since the target was last updated.
@@ -233,6 +235,8 @@ struct Prepared {
     image: Option<PathBuf>,
     scene: Option<std::sync::Arc<rinka_engine::SceneAssets>>,
     video: Option<(Player, OwnedFrame)>,
+    /// The scene's video textures: project path and file.
+    scene_videos: Vec<(String, PathBuf)>,
 }
 
 impl Host {
@@ -259,12 +263,14 @@ impl Host {
             self.images.decode(path)?;
         }
         let scene = project_io::scene_assets(dir, &project)?.map(std::sync::Arc::new);
+        let scene_videos = project_io::scene_videos(dir, &project)?;
         Ok(Prepared {
             dir: dir.to_owned(),
             project,
             image,
             scene,
             video,
+            scene_videos,
         })
     }
 
@@ -297,6 +303,32 @@ impl Host {
                     .filter(|w| same_path(&w.project_dir, &prepared.dir))
                     .map_or_else(|| SceneClock::new(now, paused), |w| w.scene_clock.clone());
                 scene_clock.set_rate(now, prepared.project.speed);
+                // ... and keeps playing its scene videos.
+                let kept = self.outputs[index]
+                    .wallpaper
+                    .as_mut()
+                    .filter(|w| {
+                        same_path(&w.project_dir, &prepared.dir)
+                            && w.scene_videos.plays(&prepared.scene_videos)
+                    })
+                    .map(|w| {
+                        std::mem::replace(
+                            &mut w.scene_videos,
+                            SceneVideos::open(&[], now, paused, 1.0),
+                        )
+                    });
+                let scene_videos = match kept {
+                    Some(mut videos) => {
+                        videos.set_rate(now, prepared.project.speed);
+                        videos
+                    }
+                    None => SceneVideos::open(
+                        &prepared.scene_videos,
+                        now,
+                        paused,
+                        prepared.project.speed,
+                    ),
+                };
                 let previous = self.outputs[index].wallpaper.replace(Wallpaper {
                     project_dir: prepared.dir,
                     project: prepared.project,
@@ -306,6 +338,7 @@ impl Host {
                     video_frame,
                     video_texture: None,
                     scene_clock,
+                    scene_videos,
                     next_frame: None,
                     dirty: false,
                     shown: false,
@@ -424,6 +457,7 @@ impl Host {
             video.upload(&gpu.queue, &yuv);
             t.target.set_video_color(video.matrix, video.range);
         }
+        let rebuilt = w.dirty;
         if w.dirty {
             let image = w
                 .image
@@ -458,6 +492,13 @@ impl Host {
             }
             w.next_frame = t.target.animated().then(Instant::now);
             w.dirty = false;
+        }
+        if !w.scene_videos.is_empty()
+            && let Some(scene) = t.target.scene_mut()
+        {
+            w.scene_videos.poll(Instant::now());
+            w.scene_videos
+                .upload(scene, &gpu.device, renderer, &gpu.queue, rebuilt);
         }
         let draw_start = Instant::now();
         let time = w.scene_clock.time(Instant::now());
@@ -585,8 +626,10 @@ impl Host {
             let paused = self.paused || slot.covered || w.window.is_none();
             if paused {
                 w.scene_clock.pause(now);
+                w.scene_videos.pause(now);
             } else {
                 w.scene_clock.resume(now);
+                w.scene_videos.resume(now);
             }
             if let Some(player) = &mut w.player {
                 if paused {

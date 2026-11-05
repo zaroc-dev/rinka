@@ -126,6 +126,7 @@ fn render_with(
     let info = TextureInfo {
         clamp: true,
         nearest: true,
+        video: None,
     };
     let content = SceneContent {
         width: 4,
