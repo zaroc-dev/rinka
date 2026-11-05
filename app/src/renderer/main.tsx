@@ -5,7 +5,7 @@ import { SCENE_FPS_CHOICES, VIDEO_DECODER_LABELS, VIDEO_ENCODER_LABELS } from ".
 import { BackIcon, CloseIcon, GearIcon, ImportIcon, PlusIcon, SearchIcon } from "./icons";
 import { type Filter, Library, SORTS, type Sort, VIEW_MODES, type ViewMode } from "./library";
 import { onPreviewStatus, previewStatus, setPreviewFps, setPreviewSound, startPreview } from "./preview";
-import { api, errorMessage, outputPixels, readPref, resolution, writePref } from "./util";
+import { api, errorMessage, outputPixels, readPref, resolution, useDismiss, writePref } from "./util";
 import { Wallpaper } from "./wallpaper";
 import { ImportView } from "./import";
 
@@ -36,6 +36,7 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [importing, setImporting] = useState(false);
   const [newOpen, setNewOpen] = useState(false);
+  useDismiss(newOpen, () => setNewOpen(false), (target) => target.closest(".menu-anchor") !== null);
   const [dropping, setDropping] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [query, setQuery] = useState("");

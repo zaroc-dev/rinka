@@ -23,7 +23,7 @@ import {
   updateProject,
   type VideoState,
 } from "./preview";
-import { api, clock, errorMessage, FIT_HINTS, FIT_LABELS, outputPixels } from "./util";
+import { api, clock, errorMessage, FIT_HINTS, FIT_LABELS, outputPixels, useDismiss } from "./util";
 
 interface Props {
   entry: LibraryEntry;
@@ -81,6 +81,18 @@ export function Wallpaper({ entry, entries, outputs, host, onEdited, onDelete, o
     setAdjustOpen(false);
   }, [entry.id, entry.assetPrefix]);
   useEffect(() => setFileOpen(false), [entry.id]);
+  // Popovers close on a press outside them; their toggle buttons
+  // (aria-expanded) close them on their own.
+  useDismiss(
+    applyOpen || adjustOpen || fileOpen || report !== null,
+    () => {
+      setApplyOpen(false);
+      setAdjustOpen(false);
+      setFileOpen(false);
+      setReport(null);
+    },
+    (target) => target.closest(".popover, [aria-expanded]") !== null,
+  );
 
   // Loads the preview. Native video color metadata can arrive after the
   // thumbnail worker finishes; reopen the preview when it becomes known.
@@ -200,7 +212,7 @@ export function Wallpaper({ entry, entries, outputs, host, onEdited, onDelete, o
                   class="icon-button"
                   aria-label="Import report"
                   title="Import report"
-                  aria-pressed={report !== null}
+                  aria-expanded={report !== null}
                   onClick={() => {
                     if (report) return setReport(null);
                     setApplyOpen(false);
