@@ -69,6 +69,7 @@ fn render(layers: Vec<Layer>) -> Option<Vec<[u8; 4]>> {
     let info = TextureInfo {
         clamp: true,
         nearest: true,
+        video: None,
     };
     let content = SceneContent {
         width: 4,
@@ -82,6 +83,7 @@ fn render(layers: Vec<Layer>) -> Option<Vec<[u8; 4]>> {
             .map(|(p, _)| ((*p).into(), info.clone()))
             .collect(),
         shaders: BTreeMap::new(),
+        sounds: Vec::new(),
     };
     let assets = SceneAssets {
         textures: colors

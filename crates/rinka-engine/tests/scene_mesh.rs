@@ -126,6 +126,7 @@ fn render_with(
     let info = TextureInfo {
         clamp: true,
         nearest: true,
+        video: None,
     };
     let content = SceneContent {
         width: 4,
@@ -139,6 +140,7 @@ fn render_with(
             ("textures/green.png".into(), info),
         ]),
         shaders: BTreeMap::new(),
+        sounds: Vec::new(),
     };
     let green = ImageData {
         width: 1,

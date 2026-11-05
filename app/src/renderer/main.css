@@ -1278,3 +1278,47 @@ h1 {
     transition: none !important;
   }
 }
+.adjust {
+  display: grid;
+  gap: 10px;
+  width: 340px;
+}
+.adjust-row {
+  display: grid;
+  grid-template-columns: 84px 1fr 56px;
+  align-items: center;
+  gap: 10px;
+  font-size: var(--text-sm);
+}
+.adjust-row input[type="range"] {
+  width: 100%;
+  accent-color: var(--primary);
+}
+.adjust-value {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  text-align: right;
+}
+.adjust .button {
+  justify-self: end;
+}
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: var(--text-sm);
+}
+.setting-row > span {
+  display: grid;
+  gap: 2px;
+}
+.volume {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.volume input[type="range"] {
+  width: 160px;
+  accent-color: var(--primary);
+}

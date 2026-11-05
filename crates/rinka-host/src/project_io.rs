@@ -44,7 +44,12 @@ pub fn scene_assets(
         Error::new(ErrorCode::Project, format!("{path}: {e}"))
     };
     let mut assets = rinka_engine::SceneAssets::default();
-    for path in scene.textures.keys() {
+    for (path, info) in &scene.textures {
+        if info.video.is_some() {
+            // Played by the host; see `scene_videos`.
+            asset_path(dir, path)?;
+            continue;
+        }
         let bytes = std::fs::read(asset_path(dir, path)?).map_err(|e| err(path, &e))?;
         let image = rinka_engine::image::decode_raw(&bytes, u32::MAX).map_err(|e| err(path, &e))?;
         assets.textures.insert(path.clone(), image);
@@ -66,6 +71,43 @@ pub fn scene_assets(
         assets.meshes.insert(path.clone(), mesh);
     }
     Ok(Some(assets))
+}
+
+/// A scene's video textures: project path and file.
+#[cfg_attr(not(any(target_os = "linux", windows)), allow(dead_code))]
+pub fn scene_videos(dir: &Path, project: &Project) -> Result<Vec<(String, PathBuf)>, Error> {
+    let rinka_engine::Content::Scene(scene) = &project.content else {
+        return Ok(Vec::new());
+    };
+    scene
+        .textures
+        .iter()
+        .filter(|(_, info)| info.video.is_some())
+        .map(|(path, _)| Ok((path.clone(), asset_path(dir, path)?)))
+        .collect()
+}
+
+/// A scene's sound layers with the absolute paths of their files.
+#[cfg_attr(not(any(target_os = "linux", windows)), allow(dead_code))]
+pub fn scene_sounds(
+    dir: &Path,
+    project: &Project,
+) -> Result<Vec<(rinka_engine::project::SceneSound, Vec<PathBuf>)>, Error> {
+    let rinka_engine::Content::Scene(scene) = &project.content else {
+        return Ok(Vec::new());
+    };
+    scene
+        .sounds
+        .iter()
+        .map(|s| {
+            let files = s
+                .files
+                .iter()
+                .map(|f| asset_path(dir, f))
+                .collect::<Result<_, _>>()?;
+            Ok((s.clone(), files))
+        })
+        .collect()
 }
 
 /// The image asset of a project, if it shows one.

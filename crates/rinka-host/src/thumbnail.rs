@@ -125,13 +125,21 @@ fn render_one(
         let assets = crate::project_io::scene_assets(&job.project, &loaded.project)
             .map_err(|e| anyhow::anyhow!(e.message))?
             .unwrap_or_default();
-        let scene = rinka_engine::GpuScene::new(
+        let mut scene = rinka_engine::GpuScene::new(
             device,
             queue,
             renderer,
             content,
             &assets,
             capture::CAPTURE_FORMAT,
+        )?;
+        scene_video_frames(
+            &job.project,
+            &loaded.project,
+            &mut scene,
+            renderer,
+            device,
+            queue,
         )?;
         target.set_scene(Some(scene));
         source_size = Some((content.width, content.height));
@@ -203,6 +211,37 @@ fn video_first_frame(
             full_range: frame.range == rinka_engine::ColorRange::Full,
         },
     }))
+}
+
+/// Shows the first frame of each of a scene's video textures.
+#[cfg(any(target_os = "linux", windows))]
+fn scene_video_frames(
+    dir: &std::path::Path,
+    project: &rinka_engine::Project,
+    scene: &mut rinka_engine::GpuScene,
+    renderer: &Renderer,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+) -> anyhow::Result<()> {
+    let videos =
+        crate::project_io::scene_videos(dir, project).map_err(|e| anyhow::anyhow!(e.message))?;
+    for (path, file) in videos {
+        let (_, frame) = crate::video::first_frame(&file)?;
+        scene.upload_video(device, renderer, queue, &path, &frame.as_yuv());
+    }
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
+fn scene_video_frames(
+    _dir: &std::path::Path,
+    _project: &rinka_engine::Project,
+    _scene: &mut rinka_engine::GpuScene,
+    _renderer: &Renderer,
+    _device: &wgpu::Device,
+    _queue: &wgpu::Queue,
+) -> anyhow::Result<()> {
+    Ok(())
 }
 
 /// Other hosts have no native decoder.

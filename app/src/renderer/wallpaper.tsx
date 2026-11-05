@@ -2,7 +2,8 @@ import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 import type { Fit, HostState, LibraryEntry, OutputInfo, Project } from "../shared/api";
 import { FITS } from "../shared/api";
 import { DisplayMap } from "./displays";
-import { CloseIcon, InfoIcon, PauseIcon, PlayIcon, TrashIcon } from "./icons";
+import { AdjustPanel } from "./adjust";
+import { CloseIcon, InfoIcon, PauseIcon, PlayIcon, SlidersIcon, TrashIcon } from "./icons";
 import { ReportView } from "./import";
 import type { ImportReport } from "../shared/api";
 import {
@@ -10,7 +11,9 @@ import {
   onPreviewLoading,
   onPreviewStatus,
   onVideoState,
+  previewMoves,
   previewStatus,
+  setPreviewSoundAllowed,
   seekVideo,
   setPreviewReference,
   showEntry,
@@ -35,6 +38,8 @@ interface Props {
 export function Wallpaper({ entry, entries, outputs, host, onEdited, onDelete, onOutputsChanged, onToast }: Props) {
   const [project, setProject] = useState<Project>(entry.project);
   const [applyOpen, setApplyOpen] = useState(false);
+  const [adjustOpen, setAdjustOpen] = useState(false);
+  const [moves, setMoves] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [status, setStatus] = useState(previewStatus());
   const [loading, setLoading] = useState(false);
@@ -67,13 +72,17 @@ export function Wallpaper({ entry, entries, outputs, host, onEdited, onDelete, o
   useEffect(() => {
     setProject(entry.project);
     setApplyOpen(false);
+    setAdjustOpen(false);
   }, [entry.id, entry.assetPrefix]);
 
   // Loads the preview. Native video color metadata can arrive after the
   // thumbnail worker finishes; reopen the preview when it becomes known.
   useEffect(() => {
     setLoadError(null);
-    showEntry(entry).catch((e) => setLoadError(errorMessage(e)));
+    setMoves(false);
+    showEntry(entry)
+      .then(() => setMoves(previewMoves()))
+      .catch((e) => setLoadError(errorMessage(e)));
   }, [entry.id, entry.assetPrefix, entry.videoColor?.matrix, entry.videoColor?.full_range]);
 
   useEffect(() => {
@@ -120,6 +129,8 @@ export function Wallpaper({ entry, entries, outputs, host, onEdited, onDelete, o
   const c = project.content;
   const backdrop = c.type === "color" ? c.color : c.type === "scene" ? "#000" : c.background;
   const liveOn = outputs.filter((o) => o.assignedId === entry.id);
+  // Its sound already plays on the desktop.
+  useEffect(() => setPreviewSoundAllowed(liveOn.length === 0), [liveOn.length]);
 
   return (
     <section class="stage" aria-label={project.title} style={{ background: backdrop }}>
@@ -186,6 +197,7 @@ export function Wallpaper({ entry, entries, outputs, host, onEdited, onDelete, o
                   onClick={() => {
                     if (report) return setReport(null);
                     setApplyOpen(false);
+                    setAdjustOpen(false);
                     void fetch(`rinka://app/library/${entry.id}/${project.provenance!.report}`)
                       .then((r) => r.json())
                       .then(setReport)
@@ -258,6 +270,22 @@ export function Wallpaper({ entry, entries, outputs, host, onEdited, onDelete, o
             </>
           )}
         </div>
+        {c.type !== "color" && (
+          <button
+            type="button"
+            class="icon-button"
+            aria-label="Adjust"
+            title="Speed and colors"
+            aria-expanded={adjustOpen}
+            onClick={() => {
+              setReport(null);
+              setApplyOpen(false);
+              setAdjustOpen((v) => !v);
+            }}
+          >
+            <SlidersIcon />
+          </button>
+        )}
         <button
           type="button"
           class="icon-button danger"
@@ -275,6 +303,7 @@ export function Wallpaper({ entry, entries, outputs, host, onEdited, onDelete, o
           aria-expanded={applyOpen}
           onClick={() => {
             setReport(null);
+            setAdjustOpen(false);
             setApplyOpen((v) => !v);
           }}
         >
@@ -289,6 +318,11 @@ export function Wallpaper({ entry, entries, outputs, host, onEdited, onDelete, o
               </button>
             </div>
             <ReportView report={report} />
+          </div>
+        )}
+        {adjustOpen && (
+          <div class="popover" role="dialog" aria-label="Speed and colors">
+            <AdjustPanel project={project} moves={moves} onChange={(next) => edit(() => next)} />
           </div>
         )}
         {applyOpen && (

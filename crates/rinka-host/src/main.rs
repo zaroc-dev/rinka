@@ -18,6 +18,8 @@ mod thumbnail;
 // shared; `desktop` is this platform's presenter, with
 // `run(endpoint, assignments)`.
 #[cfg(any(target_os = "linux", windows))]
+mod audio;
+#[cfg(any(target_os = "linux", windows))]
 mod clock;
 #[cfg(any(target_os = "linux", windows))]
 mod control;
@@ -25,6 +27,8 @@ mod control;
 mod niri;
 #[cfg(any(target_os = "linux", windows))]
 mod restore;
+#[cfg(any(target_os = "linux", windows))]
+mod settings;
 #[cfg(any(target_os = "linux", windows))]
 mod video;
 #[cfg(target_os = "linux")]
@@ -102,6 +106,17 @@ enum Cmd {
         #[arg(long, default_value_t = 3.0)]
         seconds: f64,
     },
+    /// Play a scene project's sound layers without showing it (development
+    /// aid for checking sound output).
+    #[cfg(any(target_os = "linux", windows))]
+    SoundCheck {
+        project: PathBuf,
+        #[arg(long, default_value_t = 3.0)]
+        seconds: f64,
+        /// Host-wide volume, 0..=1.
+        #[arg(long, default_value_t = 0.5)]
+        volume: f32,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -132,6 +147,7 @@ fn main() -> anyhow::Result<()> {
             let options = rinka_import::Options {
                 builtin_assets: assets.or_else(default_we_assets),
                 allow_partial,
+                probe_video: probe_video(),
             };
             let report = rinka_import::import(&item, out.as_deref(), &options)?;
             println!("{}", serde_json::to_string_pretty(&report)?);
@@ -139,6 +155,23 @@ fn main() -> anyhow::Result<()> {
         }
         #[cfg(any(target_os = "linux", windows))]
         Cmd::VideoTiming { file, seconds } => video_timing(&file, seconds),
+        #[cfg(any(target_os = "linux", windows))]
+        Cmd::SoundCheck {
+            project,
+            seconds,
+            volume,
+        } => {
+            let loaded = project_io::load(&project).map_err(|e| anyhow::anyhow!(e.message))?;
+            let sounds = project_io::scene_sounds(&project, &loaded)
+                .map_err(|e| anyhow::anyhow!(e.message))?;
+            anyhow::ensure!(!sounds.is_empty(), "the project has no sound layers");
+            let mut audio = audio::Audio::new(volume);
+            let playing = audio.open(&sounds);
+            playing.set_playing(true);
+            println!("playing {} sound layer(s) for {seconds} s", sounds.len());
+            std::thread::sleep(std::time::Duration::from_secs_f64(seconds));
+            Ok(())
+        }
     }
 }
 
@@ -158,17 +191,17 @@ fn serve(endpoint: Option<PathBuf>, restore: Option<Option<PathBuf>>) -> anyhow:
         Some(e) => e,
         None => control::default_endpoint()?,
     };
-    let assignments = match restore {
+    let saved = match restore {
         None => Default::default(),
         Some(dir) => {
             let dir = match dir {
                 Some(dir) => dir,
                 None => restore::default_data_dir()?,
             };
-            restore::saved_assignments(&dir)
+            restore::saved(&dir)
         }
     };
-    desktop::run(endpoint, assignments)
+    desktop::run(endpoint, saved)
 }
 
 #[cfg(not(any(target_os = "linux", windows)))]
@@ -222,6 +255,16 @@ fn video_timing(file: &std::path::Path, seconds: f64) -> anyhow::Result<()> {
     }
     println!("frames {shown}, worst timing error {worst:.1} ms");
     Ok(())
+}
+
+#[cfg(any(target_os = "linux", windows))]
+fn probe_video() -> Option<rinka_import::ProbeVideo> {
+    Some(video::probe_texture)
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
+fn probe_video() -> Option<rinka_import::ProbeVideo> {
+    None
 }
 
 /// Wallpaper Engine's built-in assets in the default Steam library.

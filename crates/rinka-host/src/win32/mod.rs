@@ -28,11 +28,14 @@ use serde_json::{Value, json};
 use windows_sys::Win32::Foundation::{HINSTANCE, HWND};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 
+use crate::audio::{Audio, SceneSounds};
 use crate::clock::SceneClock;
 use crate::control::{self, Command};
 use crate::project_io::{self, ImageCache};
 use crate::protocol::{Error, ErrorCode, Reply, Request};
-use crate::video::{OwnedFrame, Player};
+use crate::restore::Saved;
+use crate::settings::HostSettings;
+use crate::video::{OwnedFrame, Player, SceneVideos};
 
 mod coverage;
 mod desktop;
@@ -44,9 +47,6 @@ use desktop::Desktop;
 use monitor::Monitor;
 use timer::{WaitableTimer, Wake};
 use ui::{Event, Ui};
-
-/// Frame rate of animated scenes.
-const SCENE_FPS: f64 = 30.0;
 
 /// After the shell destroys a wallpaper window, wait this long before
 /// rebuilding, unless explorer announces its restart sooner.
@@ -76,9 +76,9 @@ fn hinstance() -> HINSTANCE {
     unsafe { GetModuleHandleW(std::ptr::null()) }
 }
 
-/// Runs the host. `assignments` (output name → project directory) are shown
-/// as their outputs appear.
-pub fn run(endpoint: PathBuf, assignments: HashMap<String, PathBuf>) -> anyhow::Result<()> {
+/// Runs the host. Saved assignments (output name → project directory) are
+/// shown as their outputs appear.
+pub fn run(endpoint: PathBuf, saved: Saved) -> anyhow::Result<()> {
     let wake = Arc::new(Wake::new()?);
     let (ui, events) = Ui::start(wake.clone())?;
     let ui = Arc::new(ui);
@@ -94,7 +94,9 @@ pub fn run(endpoint: PathBuf, assignments: HashMap<String, PathBuf>) -> anyhow::
         desktop: Some(Desktop::find()?),
         rebuild_at: None,
         outputs: Vec::new(),
-        assignments,
+        assignments: saved.assignments,
+        audio: Audio::new(saved.settings.sound_gain()),
+        settings: saved.settings,
         paused: false,
         stop: false,
     };
@@ -183,6 +185,8 @@ struct Host {
     /// Desired output name -> project directory. Survives disconnection, so a
     /// reconnected monitor gets its wallpaper back.
     assignments: HashMap<String, PathBuf>,
+    settings: HostSettings,
+    audio: Audio,
     paused: bool,
     stop: bool,
 }
@@ -207,6 +211,11 @@ struct Wallpaper {
     video_texture: Option<VideoTexture>,
     /// The scene's clock; it stops while animation is paused.
     scene_clock: SceneClock,
+    /// Players of the scene's video textures, on the scene's clock.
+    scene_videos: SceneVideos,
+    /// The scene's sound layers, as opened (to keep them across reloads).
+    sound_spec: Vec<(rinka_engine::project::SceneSound, Vec<PathBuf>)>,
+    sounds: SceneSounds,
     /// The scene animates and the next frame is due at this instant.
     next_frame: Option<Instant>,
     /// The project changed since the target was last updated.
@@ -232,6 +241,9 @@ struct Prepared {
     image: Option<PathBuf>,
     scene: Option<std::sync::Arc<rinka_engine::SceneAssets>>,
     video: Option<(Player, OwnedFrame)>,
+    /// The scene's video textures: project path and file.
+    scene_videos: Vec<(String, PathBuf)>,
+    sounds: Vec<(rinka_engine::project::SceneSound, Vec<PathBuf>)>,
 }
 
 impl Host {
@@ -258,12 +270,16 @@ impl Host {
             self.images.decode(path)?;
         }
         let scene = project_io::scene_assets(dir, &project)?.map(std::sync::Arc::new);
+        let scene_videos = project_io::scene_videos(dir, &project)?;
+        let sounds = project_io::scene_sounds(dir, &project)?;
         Ok(Prepared {
             dir: dir.to_owned(),
             project,
             image,
             scene,
             video,
+            scene_videos,
+            sounds,
         })
     }
 
@@ -282,9 +298,55 @@ impl Host {
                     Some((player, frame)) => (Some(player), Some(frame)),
                     None => (None, None),
                 };
+                let now = Instant::now();
                 if paused && let Some(player) = &mut player {
-                    player.pause(Instant::now());
+                    player.pause(now);
                 }
+                if let Some(player) = &mut player {
+                    player.set_rate(now, prepared.project.speed);
+                }
+                // A reload of the shown project continues its timeline.
+                let mut scene_clock = self.outputs[index]
+                    .wallpaper
+                    .as_ref()
+                    .filter(|w| same_path(&w.project_dir, &prepared.dir))
+                    .map_or_else(|| SceneClock::new(now, paused), |w| w.scene_clock.clone());
+                scene_clock.set_rate(now, prepared.project.speed);
+                // ... and keeps playing its scene videos.
+                let kept = self.outputs[index]
+                    .wallpaper
+                    .as_mut()
+                    .filter(|w| {
+                        same_path(&w.project_dir, &prepared.dir)
+                            && w.scene_videos.plays(&prepared.scene_videos)
+                    })
+                    .map(|w| {
+                        std::mem::replace(
+                            &mut w.scene_videos,
+                            SceneVideos::open(&[], now, paused, 1.0),
+                        )
+                    });
+                // ... and its sound, unless the sound layers changed.
+                let kept_sounds = self.outputs[index]
+                    .wallpaper
+                    .as_mut()
+                    .filter(|w| {
+                        same_path(&w.project_dir, &prepared.dir) && w.sound_spec == prepared.sounds
+                    })
+                    .map(|w| std::mem::take(&mut w.sounds));
+                let sounds = kept_sounds.unwrap_or_else(|| self.audio.open(&prepared.sounds));
+                let scene_videos = match kept {
+                    Some(mut videos) => {
+                        videos.set_rate(now, prepared.project.speed);
+                        videos
+                    }
+                    None => SceneVideos::open(
+                        &prepared.scene_videos,
+                        now,
+                        paused,
+                        prepared.project.speed,
+                    ),
+                };
                 let previous = self.outputs[index].wallpaper.replace(Wallpaper {
                     project_dir: prepared.dir,
                     project: prepared.project,
@@ -293,7 +355,10 @@ impl Host {
                     player,
                     video_frame,
                     video_texture: None,
-                    scene_clock: SceneClock::new(Instant::now(), paused),
+                    scene_clock,
+                    scene_videos,
+                    sound_spec: prepared.sounds,
+                    sounds,
                     next_frame: None,
                     dirty: false,
                     shown: false,
@@ -412,6 +477,7 @@ impl Host {
             video.upload(&gpu.queue, &yuv);
             t.target.set_video_color(video.matrix, video.range);
         }
+        let rebuilt = w.dirty;
         if w.dirty {
             let image = w
                 .image
@@ -447,10 +513,18 @@ impl Host {
             w.next_frame = t.target.animated().then(Instant::now);
             w.dirty = false;
         }
+        if !w.scene_videos.is_empty()
+            && let Some(scene) = t.target.scene_mut()
+        {
+            w.scene_videos.poll(Instant::now());
+            w.scene_videos
+                .upload(scene, &gpu.device, renderer, &gpu.queue, rebuilt);
+        }
         let draw_start = Instant::now();
         let time = w.scene_clock.time(Instant::now());
         if let Some(next) = &mut w.next_frame {
-            *next = Instant::now() + Duration::from_secs_f64(1.0 / SCENE_FPS);
+            *next =
+                crate::settings::next_frame(*next, Instant::now(), self.settings.scene_interval());
         }
         if (t.setup.config.width, t.setup.config.height) != (width, height) {
             t.setup.resize(width, height);
@@ -565,6 +639,8 @@ impl Host {
     }
 
     fn update_playback_state(&mut self, now: Instant) {
+        // Each project's sound plays once, from the first output showing it.
+        let mut heard: Vec<PathBuf> = Vec::new();
         for slot in &mut self.outputs {
             let Some(w) = slot.wallpaper.as_mut() else {
                 continue;
@@ -572,8 +648,15 @@ impl Host {
             let paused = self.paused || slot.covered || w.window.is_none();
             if paused {
                 w.scene_clock.pause(now);
+                w.scene_videos.pause(now);
             } else {
                 w.scene_clock.resume(now);
+                w.scene_videos.resume(now);
+            }
+            if !w.sounds.is_empty() {
+                let first = !heard.iter().any(|d| same_path(d, &w.project_dir));
+                heard.push(w.project_dir.clone());
+                w.sounds.set_playing(first && !paused);
             }
             if let Some(player) = &mut w.player {
                 if paused {
@@ -801,6 +884,11 @@ impl Host {
                 self.update_playback_state(Instant::now());
                 Ok(Value::Null)
             }
+            Request::Settings { patch } => {
+                self.settings.apply(patch)?;
+                self.audio.set_volume(self.settings.sound_gain());
+                Ok(json!(self.settings))
+            }
             Request::Seek { output, position } => {
                 if !position.is_finite() || position < 0.0 {
                     return Err(Error::new(
@@ -875,6 +963,7 @@ impl Host {
                 "visibility_pause": true,
             },
             "paused": self.paused,
+            "settings": self.settings,
         }))
     }
 

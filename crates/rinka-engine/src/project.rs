@@ -29,9 +29,122 @@ pub struct Project {
     pub version: u32,
     pub title: String,
     pub content: Content,
+    /// Playback rate of everything that moves: video, scene time (effects,
+    /// particles, animations). 1 is the authored speed.
+    #[serde(default = "one_f64", skip_serializing_if = "is_one")]
+    pub speed: f64,
+    /// Color adjustments applied to the finished frame.
+    #[serde(default, skip_serializing_if = "ColorAdjust::is_identity")]
+    pub adjust: ColorAdjust,
     /// Where an imported project came from.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provenance: Option<Provenance>,
+}
+
+/// Slowest and fastest playback rates a project may ask for.
+pub const SPEED_RANGE: std::ops::RangeInclusive<f64> = 0.1..=4.0;
+
+/// Adjustments of the finished frame's sRGB-encoded colors, like CSS
+/// filters: hue rotation, then saturation, contrast and brightness.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ColorAdjust {
+    /// Multiplier; 1 leaves colors unchanged, 0 is black.
+    pub brightness: f32,
+    /// Scale around mid gray; 1 unchanged, 0 is flat gray.
+    pub contrast: f32,
+    /// 1 unchanged, 0 is grayscale, above 1 more vivid.
+    pub saturation: f32,
+    /// Hue rotation in degrees.
+    pub hue: f32,
+}
+
+impl Default for ColorAdjust {
+    fn default() -> Self {
+        Self {
+            brightness: 1.0,
+            contrast: 1.0,
+            saturation: 1.0,
+            hue: 0.0,
+        }
+    }
+}
+
+impl ColorAdjust {
+    pub fn is_identity(&self) -> bool {
+        *self == Self::default()
+    }
+
+    fn check(&self) -> Result<(), ProjectError> {
+        let ok = [self.brightness, self.contrast, self.saturation]
+            .iter()
+            .all(|v| (0.0..=4.0).contains(v))
+            && self.hue.is_finite()
+            && self.hue.abs() <= 360.0;
+        if ok {
+            Ok(())
+        } else {
+            Err(ProjectError::Setting(format!("color adjustment {self:?}")))
+        }
+    }
+
+    /// Affine map applied to encoded RGB: rows of `[r, g, b, offset]`.
+    pub fn matrix(&self) -> [[f32; 4]; 3] {
+        type M = [[f64; 4]; 3];
+        // a ∘ b: apply b first.
+        let then = |a: &M, b: &M| -> M {
+            let mut out = [[0.0; 4]; 3];
+            for (r, row) in out.iter_mut().enumerate() {
+                for (c, v) in row.iter_mut().enumerate() {
+                    *v = (0..3).map(|k| a[r][k] * b[k][c]).sum::<f64>()
+                        + if c == 3 { a[r][3] } else { 0.0 };
+                }
+            }
+            out
+        };
+        // Luma weights of the CSS filter matrices (Filter Effects 1).
+        let (lr, lg, lb) = (0.213, 0.715, 0.072);
+        let (sin, cos) = f64::from(self.hue).to_radians().sin_cos();
+        let hue: M = [
+            [
+                lr + cos * (1.0 - lr) - sin * lr,
+                lg - cos * lg - sin * lg,
+                lb - cos * lb + sin * (1.0 - lb),
+                0.0,
+            ],
+            [
+                lr - cos * lr + sin * 0.143,
+                lg + cos * (1.0 - lg) + sin * 0.140,
+                lb - cos * lb - sin * 0.283,
+                0.0,
+            ],
+            [
+                lr - cos * lr - sin * (1.0 - lr),
+                lg - cos * lg + sin * lg,
+                lb + cos * (1.0 - lb) + sin * lb,
+                0.0,
+            ],
+        ];
+        let s = f64::from(self.saturation);
+        let saturation: M = [
+            [lr + (1.0 - lr) * s, lg - lg * s, lb - lb * s, 0.0],
+            [lr - lr * s, lg + (1.0 - lg) * s, lb - lb * s, 0.0],
+            [lr - lr * s, lg - lg * s, lb + (1.0 - lb) * s, 0.0],
+        ];
+        let scale = |k: f64, offset: f64| -> M {
+            [
+                [k, 0.0, 0.0, offset],
+                [0.0, k, 0.0, offset],
+                [0.0, 0.0, k, offset],
+            ]
+        };
+        let c = f64::from(self.contrast);
+        let m = then(
+            &scale(f64::from(self.brightness), 0.0),
+            &then(&scale(c, 0.5 - 0.5 * c), &then(&saturation, &hue)),
+        );
+        m.map(|row| row.map(|v| v as f32))
+    }
 }
 
 /// Source of an imported project.
@@ -115,6 +228,8 @@ pub enum ProjectError {
     Version { found: u32 },
     #[error("invalid asset path {0:?}: must be relative, use '/' and stay inside the project")]
     AssetPath(String),
+    #[error("{0} is out of range")]
+    Setting(String),
 }
 
 impl Project {
@@ -124,6 +239,8 @@ impl Project {
             version: VERSION,
             title: title.into(),
             content: Content::Color { color },
+            speed: 1.0,
+            adjust: ColorAdjust::default(),
             provenance: None,
         }
     }
@@ -148,6 +265,10 @@ impl Project {
         for path in project.dependencies() {
             check_asset_path(path)?;
         }
+        if !SPEED_RANGE.contains(&project.speed) {
+            return Err(ProjectError::Setting(format!("speed {}", project.speed)));
+        }
+        project.adjust.check()?;
         Ok(project)
     }
 
@@ -193,6 +314,42 @@ pub struct SceneContent {
     /// Translated effect shaders by id.
     #[serde(default)]
     pub shaders: std::collections::BTreeMap<String, ShaderInfo>,
+    /// Sound layers. Hosts play them; the engine only describes them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sounds: Vec<SceneSound>,
+}
+
+/// A sound layer: audio files played while the scene shows, at their own
+/// speed (project speed does not apply), paused with the scene.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SceneSound {
+    /// Stable id; imported sounds keep their source object id.
+    pub id: String,
+    pub name: String,
+    /// Project paths of the audio files, in playlist order.
+    pub files: Vec<String>,
+    #[serde(default)]
+    pub mode: SoundMode,
+    /// Linear gain, 0..=1.
+    #[serde(default = "one")]
+    pub volume: f32,
+    /// [`SoundMode::Random`]: seconds of silence between tracks, drawn
+    /// uniformly from this range.
+    #[serde(default)]
+    pub pause: [f32; 2],
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SoundMode {
+    /// The files in order, repeating.
+    #[default]
+    Loop,
+    /// A random file, then a random pause, repeating.
+    Random,
+    /// One file once.
+    Single,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -371,6 +528,33 @@ pub struct TextureInfo {
     /// Nearest-neighbor sampling.
     #[serde(default)]
     pub nearest: bool,
+    /// The texture is a looping video file instead of an image.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video: Option<VideoTextureInfo>,
+}
+
+/// A video used as a scene texture. It plays on the scene's clock: it
+/// pauses and changes speed with the scene. Its frames are converted to
+/// encoded R'G'B' with this matrix and range, which the importer probed
+/// natively, so the preview does not depend on the browser's metadata.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VideoTextureInfo {
+    pub width: u32,
+    pub height: u32,
+    pub matrix: crate::ColorMatrix,
+    #[serde(default)]
+    pub full_range: bool,
+}
+
+impl VideoTextureInfo {
+    pub fn range(&self) -> crate::ColorRange {
+        if self.full_range {
+            crate::ColorRange::Full
+        } else {
+            crate::ColorRange::Limited
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -403,6 +587,12 @@ pub struct UniformInfo {
 fn yes() -> bool {
     true
 }
+fn one_f64() -> f64 {
+    1.0
+}
+fn is_one(v: &f64) -> bool {
+    *v == 1.0
+}
 fn one() -> f32 {
     1.0
 }
@@ -416,6 +606,11 @@ fn white() -> [f32; 3] {
 impl SceneContent {
     pub fn dependencies(&self) -> Vec<&str> {
         let mut deps: Vec<&str> = self.textures.keys().map(String::as_str).collect();
+        deps.extend(
+            self.sounds
+                .iter()
+                .flat_map(|s| s.files.iter().map(String::as_str)),
+        );
         for s in self.shaders.values() {
             deps.push(&s.vertex);
             deps.push(&s.fragment);
@@ -483,6 +678,65 @@ mod tests {
                 "{bad}"
             );
         }
+    }
+
+    #[test]
+    fn speed_and_adjustments() {
+        let base = Project::solid_color("t", Srgb8::BLACK);
+        // Defaults are not written, so older readers still accept the file.
+        assert!(!base.to_json().contains("speed"));
+        assert!(!base.to_json().contains("adjust"));
+        let mut p = base.clone();
+        p.speed = 0.5;
+        p.adjust.hue = 90.0;
+        let back = Project::from_json(&p.to_json()).unwrap();
+        assert_eq!(back, p);
+        assert_eq!(back.adjust.brightness, 1.0);
+        for bad in [0.0, -1.0, 5.0] {
+            let mut q = base.clone();
+            q.speed = bad;
+            assert!(matches!(
+                Project::from_json(&q.to_json()),
+                Err(ProjectError::Setting(_))
+            ));
+        }
+        let mut q = base;
+        q.adjust.contrast = 9.0;
+        assert!(Project::from_json(&q.to_json()).is_err());
+    }
+
+    #[test]
+    fn adjustment_matrix() {
+        let apply = |a: ColorAdjust, c: [f32; 3]| {
+            let m = a.matrix();
+            m.map(|r| r[0] * c[0] + r[1] * c[1] + r[2] * c[2] + r[3])
+        };
+        let close = |a: [f32; 3], b: [f32; 3]| a.iter().zip(&b).all(|(x, y)| (x - y).abs() < 1e-5);
+        let c = [0.8, 0.4, 0.1];
+        assert!(close(apply(ColorAdjust::default(), c), c));
+        let gray = ColorAdjust {
+            saturation: 0.0,
+            ..Default::default()
+        };
+        let g = apply(gray, c);
+        assert!(close(g, [g[0]; 3]));
+        // A full turn is the identity; brightness scales; contrast pivots
+        // at mid gray.
+        let turn = ColorAdjust {
+            hue: 360.0,
+            ..Default::default()
+        };
+        assert!(close(apply(turn, c), c));
+        let dim = ColorAdjust {
+            brightness: 0.5,
+            ..Default::default()
+        };
+        assert!(close(apply(dim, c), [0.4, 0.2, 0.05]));
+        let flat = ColorAdjust {
+            contrast: 0.0,
+            ..Default::default()
+        };
+        assert!(close(apply(flat, c), [0.5; 3]));
     }
 
     #[test]

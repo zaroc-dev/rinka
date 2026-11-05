@@ -12,5 +12,5 @@ pub mod shader;
 pub mod tex;
 pub mod value;
 
-pub use convert::{Options, import};
+pub use convert::{Options, ProbeVideo, VideoProbe, import};
 pub use report::{Report, Status};

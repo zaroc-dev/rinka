@@ -38,6 +38,11 @@ A project is a directory with `project.json` and its assets:
   "provenance": { "source": "wallpaper-engine", "id": "…", "report": "import-report.json", "reference": "reference/preview.gif" } }
 ```
 
+- `speed` (optional, 0.1–4, default 1): playback rate of video and scene
+  time. `adjust` (optional): `{brightness, contrast, saturation, hue}` on the
+  finished frame's encoded values, as CSS filters define them (hue rotation,
+  saturation, contrast, brightness). Both are left out of the file at their
+  neutral values, so projects without them stay readable by older builds.
 - `color`: `{color: "#rrggbb"}`.
 - `image` / `video`: `{source: "assets/x", fit, background}`; `fit` is
   cover/contain/stretch/center/tile, computed in output pixels (center and
@@ -45,8 +50,12 @@ A project is a directory with `project.json` and its assets:
 - `scene`: canvas `width`/`height`, `fit`, `clear_color`, `color_space: gamma`,
   `layers` (bottom to top: texture, origin (center, y down), size, scale,
   angle (clockwise, radians), color, alpha, brightness, blend, optional
-  `color_blend`, effects, optional `particles`), `textures` (path → clamp/nearest), `shaders` (id →
-  WGSL vertex/fragment paths, reflected uniform layout, texture slots).
+  `color_blend`, effects, optional `particles`), `textures` (path →
+  clamp/nearest, and for video textures `video: {width, height, matrix,
+  full_range}`, probed at import), `shaders` (id →
+  WGSL vertex/fragment paths, reflected uniform layout, texture slots),
+  optional `sounds` (id, name, files, mode `loop`/`random`/`single`,
+  volume, random-mode `pause` range).
 - A layer with `mesh` draws its texture through a triangle mesh
   (`mesh.rs`): `{source, animations}`, where `source` is a `rinka.mesh`
   JSON asset (positions in layer pixels around the layer center, y down;
@@ -88,6 +97,17 @@ holds `{version: 1, assignments: {output: projectId}}`; the library is
   `Source` (image or YUV); `set_scene` attaches a `GpuScene`; `render(&Frame)`.
 - `Frame`: `FrameViews { srgb, raw }` of the same texture, render size,
   output size (larger than the target for the scaled-down preview), scene time.
+- Video textures (`TextureInfo::video`): an `Rgba8Unorm` texture that
+  layers and effect slots sample like an image. Hosts hand the newest
+  frame's planes to `GpuScene::upload_video`; the next render converts them
+  into the texture with the project's matrix and range (`VIDEO_SHADER`),
+  storing encoded R'G'B' as gamma scenes compose it. No mipmaps; black (and
+  transparent) until the first frame.
+- Color adjustments (`project.adjust`): when not neutral, `Target::render`
+  draws the content into an intermediate texture of the frame's format and
+  a full-frame pass maps its encoded RGB through one affine matrix
+  (`ColorAdjust::matrix`) onto the frame's raw view. Thumbnails, the niri
+  backdrop and the preview go through the same call.
 - `SurfaceSetup`: non-sRGB 8-bit storage format with both sRGB and raw view
   formats, opaque alpha when available, Fifo. `draw()` acquires, records via a
   closure, presents, reconfigures once on outdated.
@@ -136,7 +156,24 @@ holds `{version: 1, assignments: {output: projectId}}`; the library is
   timer wakes at the next due frame; each present requests a frame callback,
   and the next draw waits for it. No callback for 500 ms means hidden: the
   clock pauses.
-- Scenes with effects animate at 30 fps (`SCENE_FPS`) through the same timer.
+- Animated scenes draw at the host-wide `scene_fps` (`settings.rs`, 15 or 30
+  from the editor, default 30) through the same timer. The next frame is due
+  one interval after the previous due time, not after the draw, so the rate
+  holds; a frame more than an interval late restarts the cadence.
+- Scene video textures play through `SceneVideos` (`video.rs`): one
+  `Player` per video, paused, resumed and sped up with the scene clock.
+  Each scene draw polls them and uploads new frames; a rebuilt scene gets
+  the kept frames again. Thumbnails show each video's first frame.
+- Scene sound (`audio.rs`): one cpal output per host, opened with the first
+  sound; one decode thread per sound layer filling a 0.5 s buffer of stereo
+  `f32` at the output rate (FFmpeg + swresample); the callback mixes
+  playing layers with their volume and the host-wide gain. `sync_sound`
+  plays each project's sound on the first output showing it, unless paused
+  or hidden (scene surfaces count as hidden after 500 ms without a frame
+  callback, like videos). Speed does not apply to sound.
+- Project speed scales the scene clock (`clock.rs`) and the video player's
+  timeline. A reload of the shown project keeps both timelines and only
+  changes the rate.
 - Under niri (`$NIRI_SOCKET` set) each wallpaper also gets a `rinka-backdrop`
   background surface, created before the wallpaper so it stacks below it.
   A `place-within-backdrop` layer rule moves it into the overview backdrop.
@@ -145,7 +182,8 @@ holds `{version: 1, assignments: {output: projectId}}`; the library is
   and animated scenes, when niri's event stream (`niri.rs`, its own thread)
   reports the overview opening. It presents with Mailbox or Immediate (see
   gotchas).
-- `--restore [DIR]` reads the editor's `config.json` assignments at start.
+- `--restore [DIR]` reads the editor's `config.json` assignments and
+  `sceneFps` at start.
 
 ## Control protocol (v1)
 
@@ -186,7 +224,10 @@ message}}`. `hello {protocol: 1}` must come first. Commands: `capabilities`,
 `outputs` (names, geometry, transform, assignment, surface, backdrop and
 video state),
 `assign {output?, project}`, `unassign {output?}`, `reload {project}`,
-`pause`, `resume`, `seek {output?, position}`, `shutdown`. Defined in
+`pause`, `resume`, `seek {output?, position}`, `settings {scene_fps?,
+volume?, muted?}`
+(host-wide; returns the settings in effect, which `capabilities` also
+reports), `shutdown`. Defined in
 `crates/rinka-host/src/protocol.rs`. `pause` stops all animation, videos and
 scenes, and keeps the last frame; scene clocks (`clock.rs`) stand still and
 continue from there on `resume`. Assignments made while paused start paused.
@@ -206,12 +247,20 @@ continue from there on `resume`. Assignments made while paused start paused.
 - Renderer: Preact views: Library (grid/compact/list, filters, sort, search,
   drag-and-drop), Wallpaper (full-window preview, glass bar, display map,
   scene tools, report popover), Import (workshop items, report panel),
-  Settings. The open wallpaper is in the URL hash (`#/w/<id>`).
+  Settings. The open wallpaper is in the URL hash (`#/w/<id>`). The
+  wallpaper bar's sliders button opens speed and color adjustments
+  (`adjust.tsx`), saved into the project like other edits.
 - Preview (`preview.ts`): one canvas and one WebGPU device for the app's
   lifetime. Images decode in a worker. Video plays through WebCodecs
   (`mp4-player.ts`, mp4box sample table) feeding raw planes to the engine;
   `<video>` is the fallback ("Approx. colors"). Scenes fetch textures and WGSL
-  and run a 30 fps loop.
+  and run a loop at the same frame-rate setting as the host. Project speed
+  scales the preview's scene clock and its video player.
+- `config.json` holds `sceneFps` (15 or 30), `soundVolume` (0–1) and
+  `soundMuted`. The editor sends them to the host (`settings`) on connect
+  and on change.
+- Preview sound: an `<audio>` element per sound layer with the same modes,
+  silent while the window is hidden or the wallpaper is on a display.
 
 ## Wallpaper Engine import
 
@@ -222,10 +271,15 @@ continue from there on `resume`. Assignments made while paused start paused.
 4. Convert objects. Image layers go through model → material
    (`genericimage*`), with parent transforms composed and y flipped. Solid
    layers (`flat`) become a white 1×1 texture tinted with the object's
-   color. Particle objects become one particle layer per system plus static
+   color. A texture holding an MP4 is kept as `textures/<name>.mp4` and
+   probed with the host's FFmpeg (`Options::probe_video`) for size, matrix,
+   range and sound; a sound track stays silent, as in Wallpaper Engine.
+   Particle objects become one particle layer per system plus static
    children (`rinka-import/src/particles.rs`, sources in
-   `docs/m4-particles.md`). Text, sound, models, lights and composition
-   layers are reported unsupported.
+   `docs/m4-particles.md`). Sound objects become `sounds` (files copied to
+   `sounds/`, mode loop/random/single, volume, random pause); one that
+   starts silent is unsupported, as only a script would play it. Text,
+   models, lights and composition layers are reported unsupported.
 5. For each effect pass: merge material and scene overrides; combos from
    defaults, material, scene and provided textures; translate (cached by
    shader + combos).

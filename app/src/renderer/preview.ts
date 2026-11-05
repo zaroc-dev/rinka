@@ -2,7 +2,7 @@
 // lifetime. Views mount the canvas where they need it.
 
 import init, { Preview, engineVersion } from "./wasm/rinka_wasm.js";
-import type { LibraryEntry, Project } from "../shared/api";
+import type { LibraryEntry, Project, SceneSound } from "../shared/api";
 import type { DecodeRequest, DecodeResponse } from "./decode-worker";
 import { matrixCode, Mp4Player } from "./mp4-player";
 
@@ -171,6 +171,7 @@ interface PreviewMedia {
   play(): void;
   pause(): void;
   seek(seconds: number): void;
+  setRate(rate: number): void;
   close(): void;
 }
 
@@ -282,6 +283,7 @@ async function openCodecMedia(entry: LibraryEntry, url: string, p: Preview): Pro
     play: () => player.play(),
     pause: () => player.pause(),
     seek: (t) => player.seek(t),
+    setRate: (rate) => player.setRate(rate),
     close: () => player.close(),
   };
 }
@@ -331,6 +333,9 @@ async function openElementMedia(url: string, p: Preview): Promise<PreviewMedia> 
     seek: (t) => {
       v.currentTime = t;
     },
+    setRate: (rate) => {
+      v.playbackRate = rate;
+    },
     close: () => {
       closed = true;
       v.pause();
@@ -357,27 +362,197 @@ let generation = 0;
 
 // ---- scenes --------------------------------------------------------------------
 
-/** Frame rate of animated scenes in the preview. */
-const SCENE_FPS = 30;
+/** Frame rate of animated scenes in the preview; the same setting as on the desktop. */
+let sceneFps = 30;
+/** Scene time `sceneBase` seconds was at `sceneStart`, running at `sceneRate`. */
 let sceneStart = performance.now();
+let sceneBase = 0;
+let sceneRate = 1;
 let sceneLoop = 0;
 let lastSceneFrame = 0;
 
 function sceneTime(): number {
-  return (performance.now() - sceneStart) / 1000;
+  return sceneBase + ((performance.now() - sceneStart) / 1000) * sceneRate;
 }
+
+export function setPreviewFps(fps: number): void {
+  sceneFps = fps;
+}
+
+/** Applies a project's playback speed to the preview, continuing its timeline. */
+function setSpeed(speed: number): void {
+  if (speed !== sceneRate) {
+    sceneBase = sceneTime();
+    sceneStart = performance.now();
+    sceneRate = speed;
+  }
+  media?.setRate(speed);
+  for (const v of sceneVideos) v.setRate(speed);
+}
+
+/** Players of the shown scene's video textures. */
+let sceneVideos: Mp4Player[] = [];
 
 function stopScene(): void {
   cancelAnimationFrame(sceneLoop);
   sceneLoop = 0;
+  for (const v of sceneVideos) v.close();
+  sceneVideos = [];
+  for (const s of sceneSounds) s.close();
+  sceneSounds = [];
+}
+
+// ---- sound ---------------------------------------------------------------------
+//
+// Scene sound layers play through <audio> elements, with the same modes as
+// the host. They are silent while the window is hidden and while the
+// wallpaper already plays on a display, so it is never heard twice.
+
+/** Host-wide gain (volume, or 0 when muted). */
+let soundGain = 0.5;
+let soundAllowed = true;
+let sceneSounds: PreviewSound[] = [];
+
+class PreviewSound {
+  private readonly audio = new Audio();
+  private index = 0;
+  private timer = 0;
+  private active = false;
+
+  constructor(
+    private readonly urls: string[],
+    private readonly sound: SceneSound,
+  ) {
+    const mode = sound.mode ?? "loop";
+    if (mode === "random") this.index = Math.floor(Math.random() * urls.length);
+    this.audio.loop = mode === "loop" && urls.length === 1;
+    this.audio.src = urls[this.index]!;
+    this.audio.onended = () => this.next();
+    this.audio.onerror = () => console.error(`preview sound ${sound.name}: cannot play ${this.audio.src}`);
+    this.setGain();
+  }
+
+  setGain(): void {
+    this.audio.volume = Math.min(Math.max((this.sound.volume ?? 1) * soundGain, 0), 1);
+  }
+
+  setActive(active: boolean): void {
+    this.active = active;
+    if (active && this.timer === 0) void this.audio.play().catch((e: Error) => console.warn(`preview sound ${this.sound.name}:`, e.message));
+    else if (!active) this.audio.pause();
+  }
+
+  private next(): void {
+    const mode = this.sound.mode ?? "loop";
+    if (mode === "single") return;
+    if (mode === "loop") {
+      this.index = (this.index + 1) % this.urls.length;
+      return this.start();
+    }
+    const [lo, hi] = this.sound.pause ?? [0, 0];
+    this.timer = window.setTimeout(() => {
+      this.timer = 0;
+      this.index = Math.floor(Math.random() * this.urls.length);
+      this.start();
+    }, (lo + (hi - lo) * Math.random()) * 1000);
+  }
+
+  private start(): void {
+    this.audio.src = this.urls[this.index]!;
+    if (this.active) void this.audio.play().catch((e: Error) => console.warn(`preview sound ${this.sound.name}:`, e.message));
+  }
+
+  close(): void {
+    window.clearTimeout(this.timer);
+    this.audio.pause();
+    this.audio.removeAttribute("src");
+    this.audio.load();
+  }
+}
+
+function updateSounds(): void {
+  for (const s of sceneSounds) {
+    s.setGain();
+    s.setActive(soundAllowed && !document.hidden);
+  }
+}
+
+/** Sets the host-wide sound gain (the Settings volume, 0 when muted). */
+export function setPreviewSound(gain: number): void {
+  soundGain = gain;
+  updateSounds();
+}
+
+/** The preview stays silent while the wallpaper already plays on a display. */
+export function setPreviewSoundAllowed(allowed: boolean): void {
+  soundAllowed = allowed;
+  updateSounds();
+}
+
+document.addEventListener("visibilitychange", updateSounds);
+
+function playSceneSounds(entry: LibraryEntry, project: Project): void {
+  if (project.content.type !== "scene") return;
+  const base = `rinka://app/library/${entry.id}/`;
+  sceneSounds = (project.content.sounds ?? [])
+    .filter((s) => (s.volume ?? 1) > 0 && s.files.length > 0)
+    .map((s) => new PreviewSound(s.files.map((f) => base + f), s));
+  updateSounds();
+}
+
+/**
+ * Plays a scene's video textures into the engine. Their frames are drawn
+ * with the scene loop; the project's matrix and range convert them.
+ */
+async function playSceneVideos(entry: LibraryEntry, project: Project, p: Preview, token: number): Promise<void> {
+  if (project.content.type !== "scene") return;
+  const paths = Object.entries(project.content.textures).flatMap(([path, t]) => (t.video ? [path] : []));
+  const players = await Promise.all(
+    paths.map((path) =>
+      Mp4Player.open(
+        `rinka://app/library/${entry.id}/${path}`,
+        null,
+        (f) =>
+          p.uploadSceneVideoFrame(
+            path,
+            f.width,
+            f.height,
+            f.chromaWidth,
+            f.chromaHeight,
+            f.data,
+            f.offsets[0],
+            f.strides[0],
+            f.offsets[1],
+            f.strides[1],
+            f.offsets[2],
+            f.strides[2],
+          ),
+        (e) => console.error(`preview scene video ${path}:`, e),
+      ).catch((e: Error) => {
+        console.error(`preview scene video ${path}:`, e.message);
+        return null;
+      }),
+    ),
+  );
+  const opened = players.filter((v): v is Mp4Player => v !== null);
+  if (token !== generation) {
+    for (const v of opened) v.close();
+    return;
+  }
+  sceneVideos = opened;
+  for (const v of opened) {
+    v.setRate(sceneRate);
+    v.play();
+  }
 }
 
 function startScene(): void {
   stopScene();
   sceneStart = performance.now();
+  sceneBase = 0;
   const tick = (now: number) => {
     sceneLoop = requestAnimationFrame(tick);
-    if (document.hidden || now - lastSceneFrame < 1000 / SCENE_FPS - 2) return;
+    if (document.hidden || now - lastSceneFrame < 1000 / sceneFps - 2) return;
     lastSceneFrame = now;
     draw();
   };
@@ -392,7 +567,7 @@ async function loadScene(entry: LibraryEntry, project: Project, p: Preview, toke
   const texts = await Promise.all(shaders.map(async (path) => [path, await (await fetch(base + path)).text()] as const));
   const meshPaths = [...new Set(project.content.layers.flatMap((l) => (l.mesh ? [l.mesh.source] : [])))];
   const meshes = await Promise.all(meshPaths.map(async (path) => [path, await (await fetch(base + path)).text()] as const));
-  const textures = Object.keys(project.content.textures);
+  const textures = Object.entries(project.content.textures).flatMap(([path, t]) => (t.video ? [] : [path]));
   const decoded = await Promise.all(
     textures.map(async (path) => {
       const bytes = await (await fetch(base + path)).arrayBuffer();
@@ -422,6 +597,9 @@ export async function showEntry(entry: LibraryEntry, project: Project = entry.pr
       p.setProject(JSON.stringify(project), entry.assetPrefix);
       if (p.isAnimated()) startScene();
       else draw();
+      setSpeed(project.speed ?? 1);
+      playSceneSounds(entry, project);
+      await playSceneVideos(entry, project, p, token);
       return;
     }
     if (project.content.type === "video" && entry.assetUrl) {
@@ -441,6 +619,7 @@ export async function showEntry(entry: LibraryEntry, project: Project = entry.pr
       p.retainAssets([]);
       p.setProject(JSON.stringify(project), entry.assetPrefix);
       media = m;
+      setSpeed(project.speed ?? 1);
       m.play();
       draw();
       emitVideo(true);
@@ -467,11 +646,17 @@ export async function showEntry(entry: LibraryEntry, project: Project = entry.pr
   }
 }
 
+/** Whether the shown wallpaper moves (a video or an animated scene). */
+export function previewMoves(): boolean {
+  return media !== null || sceneLoop !== 0;
+}
+
 /** Applies an edit to the project currently shown; its assets are loaded. */
 export function updateProject(entry: LibraryEntry, project: Project): void {
   if (!preview) return;
   try {
     preview.setProject(JSON.stringify(project), entry.assetPrefix);
+    setSpeed(project.speed ?? 1);
     draw();
   } catch {
     void showEntry(entry, project);

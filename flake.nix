@@ -37,6 +37,8 @@
       runtimeLibs =
         pkgs: with pkgs; [
           vulkan-loader
+          # Sound output (cpal opens ALSA; PipeWire serves it on most desktops).
+          alsa-lib
           wayland
           libxkbcommon
           libGL

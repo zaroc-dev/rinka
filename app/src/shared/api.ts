@@ -23,8 +23,20 @@ export interface SceneContent {
     /** Mesh asset (`rinka.mesh`) the layer is drawn through. */
     mesh?: { source: string };
   }[];
-  textures: Record<string, { clamp?: boolean; nearest?: boolean }>;
+  textures: Record<string, { clamp?: boolean; nearest?: boolean; video?: { width: number; height: number } }>;
   shaders: Record<string, { vertex: string; fragment: string }>;
+  /** Sound layers (`rinka_engine::project::SceneSound`). */
+  sounds?: SceneSound[];
+}
+
+export interface SceneSound {
+  id: string;
+  name: string;
+  files: string[];
+  mode?: "loop" | "random" | "single";
+  volume?: number;
+  /** Random mode: seconds of silence between tracks. */
+  pause?: [number, number];
 }
 
 export interface Provenance {
@@ -37,12 +49,30 @@ export interface Provenance {
 
 export type Kind = Content["type"];
 
+/** Color adjustments of the finished frame (`rinka_engine::project::ColorAdjust`). */
+export interface ColorAdjust {
+  /** Multiplier; 1 is unchanged. */
+  brightness: number;
+  /** Around mid gray; 1 is unchanged. */
+  contrast: number;
+  /** 0 is grayscale, 1 unchanged. */
+  saturation: number;
+  /** Rotation in degrees. */
+  hue: number;
+}
+
+export const NEUTRAL_ADJUST: ColorAdjust = { brightness: 1, contrast: 1, saturation: 1, hue: 0 };
+
 /** Mirrors `rinka_engine::Project` (manifest version 1). */
 export interface Project {
   format: "rinka.project";
   version: 1;
   title: string;
   content: Content;
+  /** Playback rate of video and scene animation; 1 when absent. */
+  speed?: number;
+  /** Absent when colors are unchanged. */
+  adjust?: Partial<ColorAdjust>;
   provenance?: Provenance;
 }
 
@@ -158,10 +188,18 @@ export interface WorkshopScan {
   items: WorkshopItem[];
 }
 
+export type SceneFps = 15 | 30;
+export const SCENE_FPS_CHOICES: SceneFps[] = [15, 30];
+
 /** Editor settings stored in config.json. */
 export interface AppSettings {
   /** Show the tray icon; closing the window then hides it to the tray. */
   trayIcon: boolean;
+  /** Frame rate of animated scenes, on the desktop and in the preview. */
+  sceneFps: SceneFps;
+  /** Gain of all scene sound, 0..1. */
+  soundVolume: number;
+  soundMuted: boolean;
 }
 
 export interface AppInfo {

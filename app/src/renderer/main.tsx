@@ -1,9 +1,10 @@
 import { render } from "preact";
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import type { AppInfo, AppSettings, HostState, LibraryEntry, OutputInfo, Project, RinkaApi } from "../shared/api";
+import { SCENE_FPS_CHOICES } from "../shared/api";
 import { BackIcon, CloseIcon, GearIcon, ImportIcon, PlusIcon, SearchIcon } from "./icons";
 import { type Filter, Library, SORTS, type Sort, VIEW_MODES, type ViewMode } from "./library";
-import { onPreviewStatus, previewStatus, startPreview } from "./preview";
+import { onPreviewStatus, previewStatus, setPreviewFps, setPreviewSound, startPreview } from "./preview";
 import { api, errorMessage, outputPixels, readPref, resolution, writePref } from "./util";
 import { Wallpaper } from "./wallpaper";
 import { ImportView } from "./import";
@@ -63,6 +64,10 @@ function App() {
     void api.hostState().then(setHost);
     api.onHostState(setHost);
     void startPreview().catch(() => {});
+    void api.appSettings().then((s) => {
+      setPreviewFps(s.sceneFps);
+      setPreviewSound(s.soundMuted ? 0 : s.soundVolume);
+    });
   }, []);
 
   useEffect(() => {
@@ -387,6 +392,76 @@ function Settings({ host, outputs, onClose }: { host: HostState; outputs: Output
               </>
             )}
           </dl>
+        </section>
+
+        <section class="sheet-section">
+          <h3>Animation</h3>
+          <div class="setting-row">
+            <span>
+              Frame rate
+              <span class="muted small">Scenes, particles and effects draw at this rate, on your displays and in the preview. Videos keep their own frame rate.</span>
+            </span>
+            <div class="segmented fit" role="radiogroup" aria-label="Frame rate">
+              {SCENE_FPS_CHOICES.map((fps) => (
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={settings?.sceneFps === fps}
+                  disabled={!settings}
+                  onClick={() =>
+                    void api.setAppSettings({ sceneFps: fps }).then((s) => {
+                      setSettings(s);
+                      setPreviewFps(s.sceneFps);
+                    })
+                  }
+                >
+                  {fps} fps
+                </button>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section class="sheet-section">
+          <h3>Sound</h3>
+          <div class="setting-row">
+            <span>
+              Volume
+              <span class="muted small">Scene sound on your displays and in the preview. A wallpaper on several displays is heard once.</span>
+            </span>
+            <span class="volume">
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.01}
+                value={settings?.soundVolume ?? 0.5}
+                disabled={!settings}
+                aria-label="Volume"
+                onInput={(e) => {
+                  const soundVolume = Number(e.currentTarget.value);
+                  setSettings((s) => s && { ...s, soundVolume });
+                  setPreviewSound(settings?.soundMuted ? 0 : soundVolume);
+                  void api.setAppSettings({ soundVolume });
+                }}
+              />
+              <span class="mono adjust-value">{Math.round((settings?.soundVolume ?? 0.5) * 100)}%</span>
+            </span>
+          </div>
+          <label class="check">
+            <input
+              type="checkbox"
+              checked={settings?.soundMuted ?? false}
+              disabled={!settings}
+              onChange={(e) =>
+                void api.setAppSettings({ soundMuted: e.currentTarget.checked }).then((s) => {
+                  setSettings(s);
+                  setPreviewSound(s.soundMuted ? 0 : s.soundVolume);
+                })
+              }
+            />
+            <span>Mute wallpaper sound</span>
+          </label>
         </section>
 
         <section class="sheet-section">

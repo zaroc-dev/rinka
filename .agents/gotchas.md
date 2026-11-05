@@ -39,6 +39,19 @@ something costs more than a few minutes.
   SwiftShader (device type CPU) without an error. The app passes
   `--disable-gpu-sandbox` when that directory exists; `RINKA_GPU_SANDBOX=1`
   keeps the sandbox. The preview rejects CPU adapters on purpose.
+- **Electron started from inside another Electron app runs as Node.** A
+  terminal under an Electron host (e.g. an IDE) may export
+  `ELECTRON_RUN_AS_NODE=1`; `electron .` then fails with
+  `Cannot read properties of undefined (reading 'getPath')`. Start it with
+  `env -u ELECTRON_RUN_AS_NODE`.
+- **A test editor with its own `XDG_RUNTIME_DIR` has no sound server.**
+  libpulse looks for its socket there, so Chromium falls back to a silent
+  device; `<audio>` still advances. Check preview sound logic by wrapping
+  `HTMLMediaElement.prototype.play` in `RINKA_SMOKE_EVAL`, not by ear.
+- **A nested niri on a hidden workspace throttles everything.** Frame
+  callbacks arrive about once a second and Fifo presents block for 1–2 s,
+  so scene rates, hidden detection and even `shutdown` replies look broken.
+  Keep the nested window visible for timing checks.
 - **`capturePage` is not the screen.** It waits for the main thread and
   composites on demand, so it can show a frame the user never saw (it hid an
   8.7 s decode stall). Check user-visible behavior with screencopy (`grim`).
@@ -278,6 +291,15 @@ something costs more than a few minutes.
 - **The open implementations are GPL-2.0 (wallpaper-scene-renderer) and
   GPL-3.0 (linux-wallpaperengine).** Read them for defaults, do not copy
   code.
+
+- **A `.tex` can be an MP4 with a sound track, which Wallpaper Engine does
+  not play.** Vera Garnet's 4K60 H.264 texture carries AAC audio. Video
+  textures play muted in Wallpaper Engine (Steam discussions
+  598515152383392164 and 3187991824512096158; authors add sound layers
+  instead), so the import notes it without a loss. Verify on Windows.
+- **Video textures have no mipmaps.** Drawn much smaller than their size
+  (a 4K video in a 480-px thumbnail) they alias: mean error 3.1/255 against
+  FFmpeg's area scaling, 0.1/255 at full size.
 
 ## Editor UI
 

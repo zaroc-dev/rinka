@@ -25,7 +25,7 @@ use rinka_engine::{ColorMatrix, ColorRange, YuvFrame};
 /// Decoded frames buffered ahead of presentation.
 const QUEUE_FRAMES: usize = 6;
 
-fn init() {
+pub(crate) fn init() {
     static INIT: Once = Once::new();
     INIT.call_once(|| {
         ffmpeg::init().expect("initialize FFmpeg");
@@ -285,6 +285,33 @@ pub fn probe(path: &Path) -> anyhow::Result<VideoInfo> {
     Ok(Source::open(path)?.info)
 }
 
+/// Probes a video texture for import: its size, the matrix and range its
+/// frames decode with (as playback will use them) and whether it has sound.
+pub fn probe_texture(bytes: &[u8]) -> anyhow::Result<rinka_import::VideoProbe> {
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!("rinka-probe-{}-{n}.mp4", std::process::id()));
+    std::fs::write(&path, bytes).context("writing the video for probing")?;
+    let result = (|| {
+        let (info, frame) = first_frame(&path)?;
+        let has_audio = ffmpeg::format::input(&path)?
+            .streams()
+            .best(ffmpeg::media::Type::Audio)
+            .is_some();
+        Ok(rinka_import::VideoProbe {
+            info: rinka_engine::project::VideoTextureInfo {
+                width: info.width,
+                height: info.height,
+                matrix: frame.matrix,
+                full_range: frame.range == ColorRange::Full,
+            },
+            has_audio,
+        })
+    })();
+    let _ = std::fs::remove_file(&path);
+    result
+}
+
 /// Decodes the first frame, for thumbnails.
 pub fn first_frame(path: &Path) -> anyhow::Result<(VideoInfo, OwnedFrame)> {
     let mut source = Source::open(path)?;
@@ -517,6 +544,8 @@ pub struct Player {
     pending: Option<OwnedFrame>,
     /// Wall-clock instant at which timeline position `origin_pts` plays.
     origin: Option<(Instant, f64)>,
+    /// Timeline seconds per wall-clock second.
+    rate: f64,
     paused_at: Option<f64>,
     /// Timeline and in-file time of the last frame handed out.
     shown: Option<(f64, f64)>,
@@ -535,6 +564,7 @@ impl Player {
             generation: 0,
             pending: None,
             origin: None,
+            rate: 1.0,
             paused_at: None,
             shown: None,
             seeking: false,
@@ -568,7 +598,20 @@ impl Player {
             return Some(p);
         }
         self.origin
-            .map(|(t, pts)| pts + now.duration_since(t).as_secs_f64())
+            .map(|(t, pts)| pts + now.duration_since(t).as_secs_f64() * self.rate)
+    }
+
+    /// Plays at `rate` times the authored speed from now on.
+    pub fn set_rate(&mut self, now: Instant, rate: f64) {
+        if rate == self.rate {
+            return;
+        }
+        if self.paused_at.is_none()
+            && let Some(p) = self.position(now)
+        {
+            self.origin = Some((now, p));
+        }
+        self.rate = rate;
     }
 
     /// Returns the newest frame due at `now` (dropping older due frames) and
@@ -612,13 +655,13 @@ impl Player {
             }
             // The clock starts with the first frame shown.
             let origin = *self.origin.get_or_insert((now, frame.pts));
-            let position = origin.1 + now.duration_since(origin.0).as_secs_f64();
+            let position = origin.1 + now.duration_since(origin.0).as_secs_f64() * self.rate;
             if frame.pts <= position + 0.002 {
                 self.shown = Some((frame.pts, frame.file_pts));
                 self.seeking = false;
                 due = Some(frame);
             } else {
-                let wait = Duration::from_secs_f64(frame.pts - position);
+                let wait = Duration::from_secs_f64((frame.pts - position) / self.rate);
                 self.pending = Some(frame);
                 return (due, Some(wait));
             }
@@ -660,12 +703,119 @@ impl Player {
     }
 
     /// Position within the video: the in-file time of the frame on screen
-    /// plus the time since it was shown. Containers can misstate their
+    /// plus the timeline time since it was shown. Containers can misstate their
     /// length (truncated downloads), so this never relies on the duration.
     pub fn position_in_video(&self, now: Instant) -> Option<f64> {
         let p = self.position(now)?;
         let (pts, file_pts) = self.shown?;
         Some(file_pts + (p - pts).max(0.0))
+    }
+}
+
+/// Players for a scene's video textures. They follow the scene's clock:
+/// they pause, resume and change speed with it.
+pub struct SceneVideos {
+    videos: Vec<SceneVideo>,
+}
+
+struct SceneVideo {
+    path: String,
+    file: PathBuf,
+    player: Player,
+    /// The newest frame, kept to refill a rebuilt scene.
+    frame: Option<OwnedFrame>,
+    fresh: bool,
+}
+
+impl SceneVideos {
+    /// Opens a player per `(project path, file)`. A video that cannot be
+    /// opened is logged and stays black.
+    pub fn open(files: &[(String, PathBuf)], now: Instant, paused: bool, rate: f64) -> Self {
+        let videos = files
+            .iter()
+            .filter_map(|(path, file)| match Player::open(file) {
+                Ok(mut player) => {
+                    if paused {
+                        player.pause(now);
+                    }
+                    player.set_rate(now, rate);
+                    Some(SceneVideo {
+                        path: path.clone(),
+                        file: file.clone(),
+                        player,
+                        frame: None,
+                        fresh: false,
+                    })
+                }
+                Err(e) => {
+                    log::error!("{}: {e:#}", file.display());
+                    None
+                }
+            })
+            .collect();
+        Self { videos }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.videos.is_empty()
+    }
+
+    /// Whether these players play exactly `files`.
+    pub fn plays(&self, files: &[(String, PathBuf)]) -> bool {
+        self.videos.len() == files.len()
+            && self
+                .videos
+                .iter()
+                .zip(files)
+                .all(|(v, (path, file))| &v.path == path && &v.file == file)
+    }
+
+    pub fn pause(&mut self, now: Instant) {
+        for v in &mut self.videos {
+            v.player.pause(now);
+        }
+    }
+
+    pub fn resume(&mut self, now: Instant) {
+        for v in &mut self.videos {
+            v.player.resume(now);
+        }
+    }
+
+    pub fn set_rate(&mut self, now: Instant, rate: f64) {
+        for v in &mut self.videos {
+            v.player.set_rate(now, rate);
+        }
+    }
+
+    /// Takes the newest due frame of each video.
+    pub fn poll(&mut self, now: Instant) {
+        for v in &mut self.videos {
+            if let (Some(frame), _) = v.player.poll(now) {
+                v.frame = Some(frame);
+                v.fresh = true;
+            }
+        }
+    }
+
+    /// Uploads new frames into `scene`, or every kept frame when the scene
+    /// was rebuilt (its video textures start black).
+    pub fn upload(
+        &mut self,
+        scene: &mut rinka_engine::GpuScene,
+        device: &wgpu::Device,
+        renderer: &rinka_engine::Renderer,
+        queue: &wgpu::Queue,
+        rebuilt: bool,
+    ) {
+        for v in &mut self.videos {
+            if let Some(frame) = &v.frame
+                && (v.fresh || rebuilt)
+            {
+                scene.upload_video(device, renderer, queue, &v.path, &frame.as_yuv());
+                v.fresh = false;
+            }
+        }
     }
 }
 
@@ -706,6 +856,7 @@ mod tests {
                 generation: 0,
                 pending: None,
                 origin: None,
+                rate: 1.0,
                 paused_at: None,
                 shown: None,
                 seeking: false,
@@ -742,6 +893,27 @@ mod tests {
         );
         let looped = p.poll(start + Duration::from_millis(200)).0.unwrap();
         assert_eq!((looped.pts, looped.file_pts), (0.20, 0.0));
+    }
+
+    #[test]
+    fn rate_scales_the_schedule_and_continues_the_position() {
+        let (mut p, tx, _commands) = player();
+        for pts in [0.0, 0.1, 0.2, 0.3] {
+            tx.send(frame(pts, pts, 0)).unwrap();
+        }
+        let start = Instant::now();
+        let ms = |m: u64| start + Duration::from_millis(m);
+        assert_eq!(p.poll(start).0.unwrap().pts, 0.0);
+        p.set_rate(ms(0), 2.0);
+        // At double speed 0.1 is due after 50 ms and the wait says so.
+        let (none, wait) = p.poll(ms(20));
+        assert!(none.is_none());
+        assert_eq!(wait, Some(Duration::from_millis(30)));
+        assert_eq!(p.poll(ms(50)).0.unwrap().pts, 0.1);
+        // Halving continues from the current position (0.1 at 50 ms).
+        p.set_rate(ms(50), 0.5);
+        assert!(p.poll(ms(240)).0.is_none());
+        assert_eq!(p.poll(ms(250)).0.unwrap().pts, 0.2);
     }
 
     #[test]

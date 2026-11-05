@@ -262,7 +262,11 @@ impl Preview {
             // Scene assets move into the GPU scene; the page adds them again
             // the next time the scene is opened.
             let mut assets = rinka_engine::SceneAssets::default();
-            for path in content.textures.keys() {
+            for (path, info) in &content.textures {
+                if info.video.is_some() {
+                    // Frames arrive through `uploadSceneVideoFrame`.
+                    continue;
+                }
                 let key = format!("{asset_prefix}{path}");
                 match self.assets.remove(&key) {
                     Some(Asset::Decoded(data)) => {
@@ -471,6 +475,53 @@ impl Preview {
             );
         }
         self.target.set_video_color(video.matrix, video.range);
+        Ok(())
+    }
+
+    /// Uploads a decoded Y'CbCr frame (as laid out by `VideoFrame.copyTo`)
+    /// for the scene's video texture `path` (a project path). The project's
+    /// matrix and range convert it, as on the desktop.
+    #[wasm_bindgen(js_name = uploadSceneVideoFrame)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn upload_scene_video_frame(
+        &mut self,
+        path: &str,
+        width: u32,
+        height: u32,
+        chroma_width: u32,
+        chroma_height: u32,
+        data: &[u8],
+        y_offset: u32,
+        y_stride: u32,
+        u_offset: u32,
+        u_stride: u32,
+        v_offset: u32,
+        v_stride: u32,
+    ) -> Result<(), JsError> {
+        let plane = |offset: u32, stride: u32, rows: u32| {
+            let start = offset as usize;
+            let end = start + stride as usize * rows as usize;
+            data.get(start..end)
+                .ok_or_else(|| JsError::new("frame planes exceed the buffer"))
+        };
+        let frame = YuvFrame {
+            width,
+            height,
+            chroma_width,
+            chroma_height,
+            y: plane(y_offset, y_stride, height)?,
+            y_stride,
+            u: plane(u_offset, u_stride, chroma_height)?,
+            u_stride,
+            v: plane(v_offset, v_stride, chroma_height)?,
+            v_stride,
+            // Unused: the project's matrix and range apply.
+            matrix: ColorMatrix::guess(height),
+            range: ColorRange::Limited,
+        };
+        if let Some(scene) = self.target.scene_mut() {
+            scene.upload_video(&self.device, &self.renderer, &self.queue, path, &frame);
+        }
         Ok(())
     }
 

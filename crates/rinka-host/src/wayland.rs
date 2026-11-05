@@ -61,14 +61,14 @@ use smithay_client_toolkit::{
     },
 };
 
+use crate::audio::{Audio, SceneSounds};
 use crate::clock::SceneClock;
 use crate::control::{self, Command};
 use crate::project_io::{self, ImageCache};
 use crate::protocol::{Error, ErrorCode, Reply, Request};
-use crate::video::{OwnedFrame, Player};
-
-/// Frame rate of animated scenes.
-const SCENE_FPS: f64 = 30.0;
+use crate::restore::Saved;
+use crate::settings::HostSettings;
+use crate::video::{OwnedFrame, Player, SceneVideos};
 
 /// A video surface whose frame callback has not arrived for this long is
 /// treated as hidden and its clock pauses.
@@ -77,9 +77,9 @@ const HIDDEN_AFTER: Duration = Duration::from_millis(500);
 /// Fractional scale denominator defined by wp-fractional-scale-v1.
 const SCALE_DENOMINATOR: u32 = 120;
 
-/// Runs the host. `assignments` (output name → project directory) are shown
-/// as their outputs appear.
-pub fn run(endpoint: PathBuf, assignments: HashMap<String, PathBuf>) -> anyhow::Result<()> {
+/// Runs the host. Saved assignments (output name → project directory) are
+/// shown as their outputs appear.
+pub fn run(endpoint: PathBuf, saved: Saved) -> anyhow::Result<()> {
     let conn = Connection::connect_to_env().context("connecting to the Wayland compositor")?;
     let (globals, mut queue) = registry_queue_init(&conn).context("reading Wayland globals")?;
     let qh = queue.handle();
@@ -150,7 +150,9 @@ pub fn run(endpoint: PathBuf, assignments: HashMap<String, PathBuf>) -> anyhow::
         loop_handle: event_loop.handle(),
         video_timer: false,
         outputs: Vec::new(),
-        assignments,
+        assignments: saved.assignments,
+        audio: Audio::new(saved.settings.sound_gain()),
+        settings: saved.settings,
         paused: false,
         backdrops: niri.is_some(),
         stop: event_loop.get_signal(),
@@ -234,6 +236,8 @@ struct Host {
     /// Desired output name -> project directory. Survives disconnection, so a
     /// reconnected output gets its wallpaper back.
     assignments: HashMap<String, PathBuf>,
+    settings: HostSettings,
+    audio: Audio,
     paused: bool,
     /// Wallpapers get overview backdrop surfaces (under niri).
     backdrops: bool,
@@ -256,6 +260,11 @@ struct Wallpaper {
     scene: Option<std::sync::Arc<rinka_engine::SceneAssets>>,
     /// The scene's clock; it stops while animation is paused.
     scene_clock: SceneClock,
+    /// Players of the scene's video textures, on the scene's clock.
+    scene_videos: SceneVideos,
+    /// The scene's sound layers, as opened (to keep them across reloads).
+    sound_spec: Vec<(rinka_engine::project::SceneSound, Vec<PathBuf>)>,
+    sounds: SceneSounds,
     /// The scene animates and the next frame is due at this instant.
     next_frame: Option<Instant>,
     player: Option<Player>,
@@ -329,6 +338,9 @@ struct Prepared {
     image: Option<PathBuf>,
     video: Option<PathBuf>,
     scene: Option<std::sync::Arc<rinka_engine::SceneAssets>>,
+    /// The scene's video textures: project path and file.
+    scene_videos: Vec<(String, PathBuf)>,
+    sounds: Vec<(rinka_engine::project::SceneSound, Vec<PathBuf>)>,
 }
 
 impl Drop for Wallpaper {
@@ -385,12 +397,21 @@ impl Host {
             })?;
         }
         let scene = project_io::scene_assets(dir, &project)?.map(std::sync::Arc::new);
+        let scene_videos = project_io::scene_videos(dir, &project)?;
+        let sounds = project_io::scene_sounds(dir, &project)?;
+        for (_, path) in &scene_videos {
+            crate::video::probe(path).map_err(|e| {
+                Error::new(ErrorCode::Project, format!("{}: {e:#}", path.display()))
+            })?;
+        }
         Ok(Prepared {
             dir: dir.to_owned(),
             project,
             image,
             video,
             scene,
+            scene_videos,
+            sounds,
         })
     }
 
@@ -420,6 +441,15 @@ impl Host {
     }
 
     fn create_wallpaper(&self, wl: &wl_output::WlOutput, prepared: Prepared) -> Wallpaper {
+        let now = Instant::now();
+        let mut scene_clock = SceneClock::new(now, self.paused);
+        scene_clock.set_rate(now, prepared.project.speed);
+        let scene_videos = SceneVideos::open(
+            &prepared.scene_videos,
+            now,
+            self.paused,
+            prepared.project.speed,
+        );
         // Created first: surfaces on one layer stack in creation order, so
         // without niri's backdrop rule the backdrop stays under the wallpaper.
         let backdrop = self.backdrops.then(|| {
@@ -462,7 +492,10 @@ impl Host {
             image: prepared.image,
             video: None,
             scene: prepared.scene,
-            scene_clock: SceneClock::new(Instant::now(), self.paused),
+            scene_clock,
+            scene_videos,
+            sound_spec: Vec::new(),
+            sounds: SceneSounds::default(),
             next_frame: None,
             player: None,
             video_texture: None,
@@ -486,16 +519,37 @@ impl Host {
     fn apply_assignment(&mut self, index: usize, prepared: Option<Prepared>) {
         match prepared {
             None => self.outputs[index].wallpaper = None,
-            Some(prepared) => {
+            Some(mut prepared) => {
                 let video = prepared.video.clone();
+                let speed = prepared.project.speed;
                 let paused = self.paused;
+                let sounds = std::mem::take(&mut prepared.sounds);
+                let same_project = self.outputs[index]
+                    .wallpaper
+                    .as_ref()
+                    .is_some_and(|w| same_path(&w.project_dir, &prepared.dir));
                 if let Some(w) = &mut self.outputs[index].wallpaper {
+                    // Another project starts from zero; an edit of the shown
+                    // one (a reload) continues its timeline.
+                    let now = Instant::now();
+                    let same = same_path(&w.project_dir, &prepared.dir);
+                    if !same {
+                        w.scene_clock = SceneClock::new(now, paused);
+                    }
+                    w.scene_clock.set_rate(now, prepared.project.speed);
+                    if same && w.scene_videos.plays(&prepared.scene_videos) {
+                        w.scene_videos.set_rate(now, prepared.project.speed);
+                    } else {
+                        w.scene_videos = SceneVideos::open(
+                            &prepared.scene_videos,
+                            now,
+                            paused,
+                            prepared.project.speed,
+                        );
+                    }
                     w.project_dir = prepared.dir;
                     w.project = prepared.project;
                     w.image = prepared.image;
-                    if prepared.scene.is_some() || w.scene.is_some() {
-                        w.scene_clock = SceneClock::new(Instant::now(), paused);
-                    }
                     w.scene = prepared.scene;
                     w.dirty = true;
                 } else {
@@ -516,6 +570,7 @@ impl Host {
                             if self.paused {
                                 player.pause(Instant::now());
                             }
+                            player.set_rate(Instant::now(), speed);
                             Some(player)
                         }
                         Err(e) => {
@@ -525,10 +580,20 @@ impl Host {
                     });
                     w.video = video;
                 }
+                if let Some(player) = &mut w.player {
+                    player.set_rate(Instant::now(), speed);
+                }
+                // An edit keeps the sound playing; other sounds start over.
+                if !same_project || w.sound_spec != sounds {
+                    w.sounds = SceneSounds::default();
+                    w.sounds = self.audio.open(&sounds);
+                    w.sound_spec = sounds;
+                }
                 self.draw(index);
                 self.ensure_video_timer();
             }
         }
+        self.sync_sound();
         let used: Vec<PathBuf> = self
             .outputs
             .iter()
@@ -596,6 +661,7 @@ impl Host {
             video.upload(&gpu.queue, &yuv);
             t.target.set_video_color(video.matrix, video.range);
         }
+        let rebuilt = w.dirty;
         if w.dirty {
             let image = w
                 .image
@@ -629,10 +695,18 @@ impl Host {
                 b.drawn_for = None;
             }
         }
+        if !w.scene_videos.is_empty()
+            && let Some(scene) = t.target.scene_mut()
+        {
+            w.scene_videos.poll(Instant::now());
+            w.scene_videos
+                .upload(scene, &gpu.device, renderer, &gpu.queue, rebuilt);
+        }
         let draw_start = Instant::now();
         let time = w.scene_clock.time(Instant::now());
         if let Some(next) = &mut w.next_frame {
-            *next = Instant::now() + Duration::from_secs_f64(1.0 / SCENE_FPS);
+            *next =
+                crate::settings::next_frame(*next, Instant::now(), self.settings.scene_interval());
         }
         if w.player.is_some() || w.next_frame.is_some() {
             // Pace animation by the compositor; committed by `present`.
@@ -774,6 +848,21 @@ impl Host {
     }
 
     /// niri's overview opened: refresh the stills of animated wallpapers.
+    /// Plays the sound of each project shown once (on the first output
+    /// showing it), unless animation is paused or that output looks hidden.
+    fn sync_sound(&mut self) {
+        let mut heard: Vec<&Path> = Vec::new();
+        for w in self.outputs.iter().filter_map(|s| s.wallpaper.as_ref()) {
+            if w.sounds.is_empty() {
+                continue;
+            }
+            let first = !heard.iter().any(|d| same_path(d, &w.project_dir));
+            heard.push(&w.project_dir);
+            w.sounds
+                .set_playing(first && !self.paused && !w.hidden && w.target.is_some());
+        }
+    }
+
     fn overview_opened(&mut self) {
         let now = Instant::now();
         for index in 0..self.outputs.len() {
@@ -826,7 +915,9 @@ impl Host {
     fn video_tick(&mut self, now: Instant) -> Option<Duration> {
         let mut next: Option<Duration> = None;
         let mut any = false;
+        let mut sound_changed = false;
         let paused = self.paused;
+        let interval = self.settings.scene_interval();
         let mut soonest =
             |wait: Duration| next = Some(next.map_or(wait, |n: Duration| n.min(wait)));
         for index in 0..self.outputs.len() {
@@ -842,12 +933,19 @@ impl Host {
                 if paused {
                     continue;
                 }
+                if looks_hidden && !w.hidden {
+                    // Its clock keeps running (scenes replay to the time);
+                    // only its sound stops.
+                    log::debug!("scene surface looks hidden; stopping its sound");
+                    w.hidden = true;
+                    sound_changed = true;
+                }
                 // Animated scene: draw at its frame rate when the compositor
                 // is ready.
                 any = true;
                 if due <= now && w.frame_pending.is_none() {
                     self.draw(index);
-                    soonest(Duration::from_secs_f64(1.0 / SCENE_FPS));
+                    soonest(interval);
                     continue;
                 }
                 soonest(if due > now {
@@ -880,6 +978,9 @@ impl Host {
             if let Some(wait) = wait {
                 soonest(wait);
             }
+        }
+        if sound_changed {
+            self.sync_sound();
         }
         // Paused or hidden content still needs an occasional check.
         any.then(|| next.unwrap_or(Duration::from_millis(250)))
@@ -959,7 +1060,9 @@ impl Host {
                 }
                 for w in self.outputs.iter_mut().filter_map(|s| s.wallpaper.as_mut()) {
                     w.scene_clock.pause(now);
+                    w.scene_videos.pause(now);
                 }
+                self.sync_sound();
                 Ok(Value::Null)
             }
             Request::Resume => {
@@ -975,9 +1078,16 @@ impl Host {
                 }
                 for w in self.outputs.iter_mut().filter_map(|s| s.wallpaper.as_mut()) {
                     w.scene_clock.resume(now);
+                    w.scene_videos.resume(now);
                 }
+                self.sync_sound();
                 self.ensure_video_timer();
                 Ok(Value::Null)
+            }
+            Request::Settings { patch } => {
+                self.settings.apply(patch)?;
+                self.audio.set_volume(self.settings.sound_gain());
+                Ok(json!(self.settings))
             }
             Request::Seek { output, position } => {
                 let targets = self.target_outputs(output.as_deref())?;
@@ -1046,6 +1156,7 @@ impl Host {
                 "overview_backdrop": self.backdrops,
             },
             "paused": self.paused,
+            "settings": self.settings,
         }))
     }
 
@@ -1208,6 +1319,7 @@ impl CompositorHandler for Host {
             w.video_frame.is_some() || w.next_frame.is_some_and(|due| due <= Instant::now());
         if was_hidden {
             self.ensure_video_timer();
+            self.sync_sound();
         }
         if has_frame {
             self.draw(index);

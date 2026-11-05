@@ -117,6 +117,8 @@ export class Mp4Player {
   private flushing = false;
   private frames: VideoFrame[] = [];
   private origin: { at: number; pts: number } | null = null;
+  /** Timeline seconds per wall-clock second. */
+  private rate = 1;
   private pausedAt: number | null = null;
   private dropBefore: number | null = null;
   private raf = 0;
@@ -207,7 +209,16 @@ export class Mp4Player {
 
   private position(now: number): number | null {
     if (this.pausedAt !== null) return this.pausedAt;
-    return this.origin ? this.origin.pts + (now - this.origin.at) / 1000 : null;
+    return this.origin ? this.origin.pts + ((now - this.origin.at) / 1000) * this.rate : null;
+  }
+
+  /** Plays at `rate` times the authored speed, continuing from the current position. */
+  setRate(rate: number): void {
+    if (rate === this.rate) return;
+    const now = performance.now();
+    const p = this.pausedAt === null ? this.position(now) : null;
+    if (p !== null) this.origin = { at: now, pts: p };
+    this.rate = rate;
   }
 
   /** Seconds into the video. */

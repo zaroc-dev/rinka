@@ -36,6 +36,7 @@ reason here in the same change.
 | Compose in linear light, premultiplied alpha, store in a non-sRGB format with an sRGB view | Correct blending and an exact match between browser and native (both get the same 8-bit values). |
 | Imported scenes compose in gamma space through the raw view | Wallpaper Engine blends encoded values; matching its output means matching that. |
 | Image fits computed in output pixels; center/tile at 1:1 device pixels | Predictable on mixed-DPI and rotated outputs. |
+| Color adjustments act on encoded values with the CSS filter matrices, in one extra pass only when not neutral | Same result for linear (image, video) and gamma (scene) composition, users know the controls from CSS and image editors, and unadjusted wallpapers cost nothing extra. |
 | Decode caps (8192 native, 4096 preview) keep the original placement size | Large images still fit the same way; only sharpness changes. |
 | Y'CbCr → RGB in the engine shader with the stream's matrix and range | Chromium's own conversion uses the wrong matrix (see gotchas). |
 | Untagged video: BT.709 at ≥720 lines, BT.601 below | Common decoder convention. |
@@ -50,6 +51,10 @@ reason here in the same change.
 | Matrix and range for the preview come from the native probe | WebCodecs misreports range. |
 | Timing from presentation timestamps; loops continue the timeline; position from the shown frame's file PTS | VFR and truncated files behave correctly. |
 | Hidden surfaces pause (no frame callback for 500 ms) | Static and covered content costs nothing. |
+| Speed is per project and scales everything that moves except sound | One rate for video and scene time keeps a scene's parts (particles, effects, puppets, scene video) in step. Sound keeps its speed: resampling would change its pitch. |
+| Scene sound: cpal output, FFmpeg decode, one streaming decoder per layer; host-wide volume (default 50%) and mute | cpal covers ALSA/PipeWire and WASAPI with one API; FFmpeg is already the decoder. Streaming keeps playlists of songs out of memory. Half volume because a wallpaper starting music at login should not be loud. |
+| A project's sound plays once, on the first output showing it; the editor preview is silent while that wallpaper is on a display | Wallpapers are often on several outputs; two copies of a song out of phase, or preview and desktop together, sound broken. |
+| The 15/30 fps limit applies to scenes only | Videos keep their own timestamps, so a 24 or 30 fps video stays smooth; the limit saves power where Rinka chooses the rate. |
 
 ## Wallpaper Engine import
 

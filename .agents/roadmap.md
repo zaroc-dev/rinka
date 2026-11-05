@@ -1,6 +1,6 @@
 # Roadmap
 
-Status as of 2026-10-15. Measurements behind each line are in `docs/`.
+Status as of 2026-11-05. Measurements behind each line are in `docs/`.
 
 ## Milestones
 
@@ -37,19 +37,20 @@ unexplained mismatch on validated scenes.
     one- and two-channel particle sprites (16 scenes) now draw as Wallpaper
     Engine draws them.
 - Crimson Sun native: ~28 fps, ~2 ms CPU per frame, 507 MiB GPU.
+- Vera Garnet (4K60 video texture): supported since 2026-11-05.
 
 ## Blockers by scenes affected
 
 | Feature | Scenes | Notes |
 | --- | --- | --- |
 | Particles, remaining parts | 22 | `controlpointattract` 54 objects, perspective 39, per-particle children 46, rope renderers 27 |
-| Sound | 13 | Playback plus audio-reactive values |
+| Sound | 0 | Playback done 2026-11-05; audio-reactive values still read silence |
 | Multi-buffer effects | 11 | Effects with named FBOs between passes |
 | `composelayer` layer shader | 10 | 13 layers |
 | Untranslatable shaders | 9 | 13 pairs; e.g. HLSL implicit truncation |
 | Text | 7 | 37 layers |
 | Camera parallax, bloom | 6 each | Scene-level settings |
-| Video textures on layers | 2 | MP4 inside `.tex`; was decoded as noise before 2026-10-14 |
+| Video textures on layers | 0 | Done 2026-11-05 |
 | Composition layers (effects on everything below) | 4 | |
 | Color blend modes on layers | 1 left | Done on image and solid layers (2026-10-15); left: one text layer (with text) |
 | Effects on solid layers | 2 | Such layers import hidden (audio bars, a tint) |
@@ -75,18 +76,24 @@ Max count: median 20, largest 100 000.
 
 Values: 162 scripted, 20 animated, 161 user-bound (all use static values now).
 
+Playback settings (2026-11-05, `docs/playback-settings.md`): per-project
+speed and color adjustments, host-wide scene frame rate 15/30.
+
 ## Next, in order
 
-1. **Sound playback** (#16): 13 scenes use it.
-2. **Particle follow-ups**: control points (cursor attraction), per-particle
+1. **Wallpaper Engine user properties** (colors, sliders, toggles, combos,
+   sound volumes; 161 user-bound values use their defaults). Sound layers
+   and video textures landed on 2026-11-05 (`docs/m4-sound.md`,
+   `docs/m4-scene-video.md`).
+2. **Audio-reactive values** (`g_AudioSpectrum*`): silence today.
+3. **Particle follow-ups**: control points (cursor attraction), per-particle
    child systems, perspective particles, rope renderers.
-3. **Text layers**: 7 scenes; Moon Touch's remaining difference.
-4. **Composition layers** (`composelayer`) and **multi-buffer effects**:
+4. **Text layers**: 7 scenes; Moon Touch's remaining difference.
+5. **Composition layers** (`composelayer`) and **multi-buffer effects**:
    10 and 11 scenes.
-5. **M3 editor**: layer list (reorder, hide, transform, configure) with live
+6. **M3 editor**: layer list (reorder, hide, transform, configure) with live
    preview; save and reopen; then project stacks per output.
-6. Video textures on layers, SceneScript, animated values, user properties
-   in the UI.
+7. SceneScript, animated values.
 
 Reordered on 2026-10-14 after recounting by scene instead of by layer; the
 earlier order put solid and composition layers first on a count of 13

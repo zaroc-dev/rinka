@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 use rinka_engine::mesh::MeshAnimation;
 use rinka_engine::project::{
     ColorBlend, Content, Effect, EffectPass, Fit, Layer, LayerAttach, LayerBlend, LayerMesh,
-    Project, Provenance, SceneColorSpace, SceneContent, ShaderInfo, TextureInfo, UniformInfo,
+    Project, Provenance, SceneColorSpace, SceneContent, SceneSound, ShaderInfo, SoundMode,
+    TextureInfo, UniformInfo, VideoTextureInfo,
 };
 use serde_json::Value;
 
@@ -25,6 +26,19 @@ pub struct Options {
     pub builtin_assets: Option<PathBuf>,
     /// Write a project even when some features are lost.
     pub allow_partial: bool,
+    /// Reads a video file's stream properties. Without it, video textures
+    /// are unsupported: the engine needs their size, matrix and range.
+    pub probe_video: Option<ProbeVideo>,
+}
+
+/// Probes an MP4 file's bytes.
+pub type ProbeVideo = fn(&[u8]) -> anyhow::Result<VideoProbe>;
+
+/// What import needs to know about a video texture.
+#[derive(Clone, Copy, Debug)]
+pub struct VideoProbe {
+    pub info: VideoTextureInfo,
+    pub has_audio: bool,
 }
 
 /// A converted project before it is written.
@@ -247,6 +261,9 @@ struct SceneBuilder {
     /// Source texture path → project path.
     texture_paths: HashMap<String, String>,
     translations: HashMap<String, Result<String, String>>,
+    probe_video: Option<ProbeVideo>,
+    /// Project paths of video textures with a sound track.
+    videos_with_audio: HashSet<String>,
 }
 
 /// An object's `colorBlendMode` (Wallpaper Engine's `BLENDMODE` numbers):
@@ -369,6 +386,8 @@ fn convert_scene(
         shaders: BTreeMap::new(),
         texture_paths: HashMap::new(),
         translations: HashMap::new(),
+        probe_video: options.probe_video,
+        videos_with_audio: HashSet::new(),
     };
 
     // Canvas and global features.
@@ -453,6 +472,7 @@ fn convert_scene(
     };
 
     let mut layers = Vec::new();
+    let mut sounds = Vec::new();
     // Attached layer id → its plain world transform and report source.
     let mut attach_fallback: HashMap<String, (Transform, String)> = HashMap::new();
     for obj in &objects {
@@ -518,9 +538,18 @@ fn convert_scene(
             report.push(item);
             continue;
         }
-        let (kind, why) = if kind_of("sound") {
-            ("sound", "sound playback is not supported")
-        } else if kind_of("text") {
+        if kind_of("sound") {
+            let mut item = Item::new(&source, &name, "sound");
+            if let Some(sound) = builder.sound(obj, &id, &name, &mut item) {
+                item.native = Some(format!("sound {}", sound.id));
+                sounds.push(sound);
+            } else if item.status != Status::Unsupported {
+                item.unsupported("could not be converted");
+            }
+            report.push(item);
+            continue;
+        }
+        let (kind, why) = if kind_of("text") {
             ("text", "text layers are not supported yet")
         } else if kind_of("model") {
             ("3D model", "3D models are not supported")
@@ -578,6 +607,7 @@ fn convert_scene(
         layers,
         textures: builder.textures,
         shaders: builder.shaders,
+        sounds,
     };
     let mut project = Project::solid_color(title, rinka_engine::Srgb8::BLACK);
     project.content = Content::Scene(Box::new(content));
@@ -617,6 +647,97 @@ const PROVIDED: &[&str] = &[
 ];
 
 impl SceneBuilder {
+    /// Converts a sound object, copying its audio files into `sounds/`.
+    fn sound(&mut self, obj: &Value, id: &str, name: &str, item: &mut Item) -> Option<SceneSound> {
+        let mode = match obj
+            .get("playbackmode")
+            .and_then(Value::as_str)
+            .unwrap_or("loop")
+        {
+            "loop" => SoundMode::Loop,
+            "random" => SoundMode::Random,
+            "single" => SoundMode::Single,
+            other => {
+                item.partial(format!("playback mode {other} is treated as loop"));
+                SoundMode::Loop
+            }
+        };
+        if obj.get("startsilent").and_then(value::boolean) == Some(true) {
+            // Only SceneScript (`play()`) starts such a sound.
+            item.unsupported(
+                "it starts silent and only a script would play it; scripts do not run yet",
+            );
+            return None;
+        }
+        let volume = match obj.get("volume") {
+            Some(v) => {
+                let (_, extras) = value::unwrap(v);
+                if extras.script || extras.animation {
+                    item.partial("its volume is scripted or animated; the static value is used");
+                }
+                if let Some(user) = &extras.user {
+                    item.notes.push(format!(
+                        "its volume follows the property {user}; the default is used"
+                    ));
+                }
+                value::float(v).unwrap_or(1.0).clamp(0.0, 1.0)
+            }
+            None => 1.0,
+        };
+        let mut files = Vec::new();
+        for path in obj
+            .get("sound")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let Some(path) = path.as_str() else { continue };
+            let Some(bytes) = self.resolver.read(path, None) else {
+                item.partial(format!("{path} is missing"));
+                continue;
+            };
+            let file = path.rsplit('/').next().unwrap_or(path);
+            let (stem, ext) = file.rsplit_once('.').unwrap_or((file, "mp3"));
+            let project_path = format!(
+                "sounds/{}-{}.{}",
+                sanitize(stem),
+                short_hash(&path),
+                sanitize(&ext.to_lowercase())
+            );
+            self.files.insert(project_path.clone(), bytes);
+            files.push(project_path);
+        }
+        if files.is_empty() {
+            item.unsupported("it has no playable audio file");
+            return None;
+        }
+        let min = obj
+            .get("mintime")
+            .and_then(value::float)
+            .unwrap_or(0.0)
+            .max(0.0);
+        let max = obj
+            .get("maxtime")
+            .and_then(value::float)
+            .unwrap_or(min)
+            .max(min);
+        if volume == 0.0 {
+            item.notes.push("its volume is 0, so it is silent".into());
+        }
+        Some(SceneSound {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            files,
+            mode,
+            volume,
+            pause: if mode == SoundMode::Random {
+                [min, max]
+            } else {
+                [0.0, 0.0]
+            },
+        })
+    }
+
     /// Decodes `materials/<name>.tex` (or an existing path) into a PNG
     /// asset and returns its project path.
     fn texture(&mut self, name: &str, effect_dir: Option<&str>) -> Result<String, String> {
@@ -650,8 +771,13 @@ impl SceneBuilder {
             .read(&path, effect_dir)
             .ok_or_else(|| format!("texture {name} not found"))?;
         let t = tex::decode(&bytes).map_err(|e| format!("texture {name}: {e}"))?;
-        if t.video.is_some() {
-            return Err(format!("texture {name} is a video"));
+        if let Some(video) = t.video {
+            if particle {
+                return Err(format!(
+                    "texture {name} is a video; particle sprites cannot be videos yet"
+                ));
+            }
+            return self.store_video(&key, name, video, t.flags);
         }
         let mut image = t
             .images
@@ -675,6 +801,56 @@ impl SceneBuilder {
             tex::as_particle_sprite(t.format, &mut image);
         }
         self.store(&key, name, &image, flags)
+    }
+
+    /// Keeps a video texture's MP4 as an asset and returns its project path.
+    fn store_video(
+        &mut self,
+        key: &str,
+        name: &str,
+        video: Vec<u8>,
+        flags: u32,
+    ) -> Result<String, String> {
+        let probe = self.probe_video.ok_or_else(|| {
+            format!("texture {name} is a video, and this build cannot read video")
+        })?;
+        let probed = probe(&video)
+            .map_err(|e| format!("texture {name} is a video that cannot be read: {e:#}"))?;
+        let stem = sanitize(
+            name.trim_end_matches(".tex")
+                .rsplit('/')
+                .next()
+                .unwrap_or(name),
+        );
+        let project_path = format!("textures/{stem}-{}.mp4", short_hash(&key));
+        self.files.insert(project_path.clone(), video);
+        if probed.has_audio {
+            self.videos_with_audio.insert(project_path.clone());
+        }
+        self.textures.insert(
+            project_path.clone(),
+            TextureInfo {
+                clamp: flags & tex::FLAG_CLAMP_UVS != 0,
+                nearest: flags & tex::FLAG_NO_INTERPOLATION != 0,
+                video: Some(probed.info),
+            },
+        );
+        self.texture_paths
+            .insert(key.to_owned(), project_path.clone());
+        Ok(project_path)
+    }
+
+    /// Notes what a layer showing video texture `path` loses.
+    fn note_video(&self, path: &str, item: &mut Item) {
+        if self.textures.get(path).is_some_and(|t| t.video.is_some()) {
+            item.notes
+                .push("plays its video texture looped, on the scene's clock".into());
+            if self.videos_with_audio.contains(path) {
+                // Wallpaper Engine does not play it either.
+                item.notes
+                    .push("its sound track stays silent, as in Wallpaper Engine".into());
+            }
+        }
     }
 
     /// Writes a decoded texture as a PNG asset and returns its project path.
@@ -711,6 +887,7 @@ impl SceneBuilder {
             TextureInfo {
                 clamp: flags & tex::FLAG_CLAMP_UVS != 0,
                 nearest: flags & tex::FLAG_NO_INTERPOLATION != 0,
+                video: None,
             },
         );
         self.texture_paths
@@ -772,6 +949,7 @@ impl SceneBuilder {
                 TextureInfo {
                     clamp: true,
                     nearest: false,
+                    video: None,
                 },
             );
         }
@@ -1119,6 +1297,7 @@ impl SceneBuilder {
                 return None;
             }
         };
+        self.note_video(&texture, item);
 
         let size = obj
             .get("size")
@@ -1128,6 +1307,10 @@ impl SceneBuilder {
                     model.get("width")?.as_f64()? as f32,
                     model.get("height")?.as_f64()? as f32,
                 ])
+            })
+            .or_else(|| {
+                let v = self.textures.get(&texture)?.video?;
+                Some([v.width as f32, v.height as f32])
             })
             .or_else(|| {
                 let png = self.files.get(&texture)?;

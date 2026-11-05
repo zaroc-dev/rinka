@@ -393,3 +393,40 @@ fn yuv_frames_convert_with_their_matrix_and_range() {
         }
     }
 }
+
+#[test]
+fn color_adjustments_apply_to_encoded_values() {
+    let Some(g) = gpu() else { return };
+    let color = Srgb8::new(60, 100, 150);
+    let mut p = Project::solid_color("t", color);
+    p.adjust.brightness = 0.5;
+    let rows = render(&g, &p, None, (8, 8), (8, 8));
+    for px in rows.iter().flatten() {
+        assert_eq!(*px, [30, 50, 75, 255]);
+    }
+
+    // Every adjustment at once against the CPU matrix (±1 for rounding),
+    // on an image so placement and adjustment combine.
+    p = image_project(Fit::Stretch, Srgb8::BLACK);
+    p.adjust = rinka_engine::project::ColorAdjust {
+        brightness: 1.1,
+        contrast: 0.8,
+        saturation: 1.6,
+        hue: 40.0,
+    };
+    let img = RgbaImage::from_pixel(4, 4, Rgba([200, 90, 40, 255]));
+    let m = p.adjust.matrix();
+    let c = [200.0 / 255.0, 90.0 / 255.0, 40.0 / 255.0];
+    let expected = m.map(|r| {
+        ((r[0] * c[0] + r[1] * c[1] + r[2] * c[2] + r[3]).clamp(0.0, 1.0) * 255.0).round()
+    });
+    for px in render(&g, &p, Some(&img), (8, 8), (8, 8)).iter().flatten() {
+        for k in 0..3 {
+            assert!(
+                (f32::from(px[k]) - expected[k]).abs() <= 1.0,
+                "{px:?} vs {expected:?}"
+            );
+        }
+        assert_eq!(px[3], 255);
+    }
+}
