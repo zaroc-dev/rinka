@@ -95,6 +95,15 @@ something costs more than a few minutes.
   than ours. Compare against exact math on the stored code values.
 - **FFmpeg contexts are not `Send`.** Open the source on the decode thread
   and send the info back.
+- **A hardware device opening proves nothing.** With `hw_device_ctx` set,
+  FFmpeg's default `get_format` silently decodes in software when the device
+  rejects a stream (profile, size). Check that the first frame comes back in
+  the device's pixel format before trusting it; frame threading is off for
+  hardware decoding, so a silent fallback would also be single-threaded.
+- **GPU decoder setup is slow.** Creating a CUDA or VA-API device and
+  decoding a test frame takes 100–300 ms. `Player::open` returns after a
+  software probe; the device is set up on the decode thread, or every
+  assignment freezes the other outputs' animation.
 
 ## Wayland host
 

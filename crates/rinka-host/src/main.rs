@@ -105,6 +105,9 @@ enum Cmd {
         file: PathBuf,
         #[arg(long, default_value_t = 3.0)]
         seconds: f64,
+        /// auto, nvdec, vaapi, d3d11va or software.
+        #[arg(long, default_value = "auto")]
+        decoder: String,
     },
     /// Play a scene project's sound layers without showing it (development
     /// aid for checking sound output).
@@ -154,7 +157,11 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         #[cfg(any(target_os = "linux", windows))]
-        Cmd::VideoTiming { file, seconds } => video_timing(&file, seconds),
+        Cmd::VideoTiming {
+            file,
+            seconds,
+            decoder,
+        } => video_timing(&file, seconds, &decoder),
         #[cfg(any(target_os = "linux", windows))]
         Cmd::SoundCheck {
             project,
@@ -220,8 +227,19 @@ fn info() -> anyhow::Result<()> {
 }
 
 #[cfg(any(target_os = "linux", windows))]
-fn video_timing(file: &std::path::Path, seconds: f64) -> anyhow::Result<()> {
+fn video_timing(file: &std::path::Path, seconds: f64, decoder: &str) -> anyhow::Result<()> {
     use std::time::{Duration, Instant};
+    let mut settings = settings::HostSettings::default();
+    settings
+        .apply(settings::SettingsPatch {
+            video_decoder: Some(
+                serde_json::from_value(serde_json::Value::from(decoder))
+                    .with_context(|| format!("unknown decoder {decoder}"))?,
+            ),
+            ..Default::default()
+        })
+        .map_err(|e| anyhow::anyhow!(e.message))?;
+    video::set_decoder(settings.video_decoder);
     let mut player = video::Player::open(file)?;
     println!("{}", serde_json::to_string(&player.info)?);
     let start = Instant::now();
@@ -253,7 +271,10 @@ fn video_timing(file: &std::path::Path, seconds: f64) -> anyhow::Result<()> {
             "the decoder stopped after {shown} frames"
         );
     }
-    println!("frames {shown}, worst timing error {worst:.1} ms");
+    println!(
+        "frames {shown}, worst timing error {worst:.1} ms, decoder {}",
+        player.decoder().map_or("unknown", |d| d.name())
+    );
     Ok(())
 }
 

@@ -92,7 +92,9 @@ holds `{version: 1, assignments: {output: projectId}}`; the library is
   size (original image size); `texture_width/height` the actual texels.
   Decoding may downscale (8192 native, 4096 preview) without moving anything.
 - `VideoTexture`: Y, U, V `R8Unorm` planes with explicit chroma size
-  (4:2:0, 4:2:2, 4:4:4).
+  (4:2:0, 4:2:2, 4:4:4). Interleaved chroma (NV12, from hardware decoders)
+  is one `Rg8Unorm` plane beside a 1×1 zero V plane; both shaders read
+  `Cr = U.g + V.r`, so planar and interleaved frames share one path.
 - `Target` (per output): uniforms and bind group; `set_project` binds a
   `Source` (image or YUV); `set_scene` attaches a `GpuScene`; `render(&Frame)`.
 - `Frame`: `FrameViews { srgb, raw }` of the same texture, render size,
@@ -152,7 +154,12 @@ holds `{version: 1, assignments: {output: projectId}}`; the library is
 - `prepare()` loads a project and decodes or probes its assets before
   anything changes, so errors reach the client. Images are cached per file
   version (`ImageCache`) and shared across outputs.
-- Video: one `Player` per wallpaper (decode thread with a bounded queue). The
+- Video: one `Player` per wallpaper (decode thread with a bounded queue).
+  The thread opens a GPU decoder when the `video_decoder` setting allows
+  (NVDEC, then VA-API), proves it on the first frame, and copies frames back
+  as NV12; otherwise it decodes in software. Queued frames reference
+  FFmpeg's buffers rather than copying them. `Player::open` waits only for
+  the software probe; device setup (100–300 ms) happens on the thread. The
   timer wakes at the next due frame; each present requests a frame callback,
   and the next draw waits for it. No callback for 500 ms means hidden: the
   clock pauses.
@@ -222,10 +229,10 @@ Newline-delimited JSON on `$XDG_RUNTIME_DIR/rinka/host.sock`. Each request
 `{"id", "cmd", …}` gets one response `{"id", "ok", "result" | "error": {code,
 message}}`. `hello {protocol: 1}` must come first. Commands: `capabilities`,
 `outputs` (names, geometry, transform, assignment, surface, backdrop and
-video state),
+video state, including each video's and scene video's `decoder`),
 `assign {output?, project}`, `unassign {output?}`, `reload {project}`,
 `pause`, `resume`, `seek {output?, position}`, `settings {scene_fps?,
-volume?, muted?}`
+volume?, muted?, video_decoder?}`
 (host-wide; returns the settings in effect, which `capabilities` also
 reports), `shutdown`. Defined in
 `crates/rinka-host/src/protocol.rs`. `pause` stops all animation, videos and
@@ -256,8 +263,9 @@ continue from there on `resume`. Assignments made while paused start paused.
   `<video>` is the fallback ("Approx. colors"). Scenes fetch textures and WGSL
   and run a loop at the same frame-rate setting as the host. Project speed
   scales the preview's scene clock and its video player.
-- `config.json` holds `sceneFps` (15 or 30), `soundVolume` (0–1) and
-  `soundMuted`. The editor sends them to the host (`settings`) on connect
+- `config.json` holds `sceneFps` (15 or 30), `soundVolume` (0–1),
+  `soundMuted` and `videoDecoder` (`auto`, `nvdec`, `vaapi`, `d3d11va`,
+  `software`). The editor sends them to the host (`settings`) on connect
   and on change.
 - Preview sound: an `<audio>` element per sound layer with the same modes,
   silent while the window is hidden or the wallpaper is on a display.

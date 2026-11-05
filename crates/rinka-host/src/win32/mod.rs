@@ -84,6 +84,8 @@ pub fn run(endpoint: PathBuf, saved: Saved) -> anyhow::Result<()> {
     let ui = Arc::new(ui);
     let timer = WaitableTimer::new()?;
 
+    // Before restored assignments open their videos.
+    crate::video::set_decoder(saved.settings.video_decoder);
     let mut host = Host {
         ui: ui.clone(),
         instance: wgpu::Instance::new(
@@ -638,6 +640,40 @@ impl Host {
         next
     }
 
+    /// Reopens every playing video (after the decoder setting changed).
+    /// Videos continue from their position; scene videos start over.
+    fn reopen_videos(&mut self) {
+        for index in 0..self.outputs.len() {
+            let Some(w) = self.outputs[index].wallpaper.as_mut() else {
+                continue;
+            };
+            if w.player.is_none() && w.scene_videos.is_empty() {
+                continue;
+            }
+            let now = Instant::now();
+            let position = w.player.as_ref().and_then(|p| p.position_in_video(now));
+            // Different scene videos make the reassignment open new ones;
+            // preparing always opens a new player.
+            w.scene_videos = SceneVideos::open(&[], now, false, 1.0);
+            let dir = w.project_dir.clone();
+            let result = self
+                .prepare(&dir)
+                .and_then(|prepared| self.apply_assignment(index, Some(prepared)));
+            if let Err(e) = result {
+                log::error!("reopening {}: {}", dir.display(), e.message);
+            }
+            if let (Some(position), Some(p)) = (
+                position,
+                self.outputs[index]
+                    .wallpaper
+                    .as_mut()
+                    .and_then(|w| w.player.as_mut()),
+            ) {
+                p.seek(position, Instant::now());
+            }
+        }
+    }
+
     fn update_playback_state(&mut self, now: Instant) {
         // Each project's sound plays once, from the first output showing it.
         let mut heard: Vec<PathBuf> = Vec::new();
@@ -885,8 +921,13 @@ impl Host {
                 Ok(Value::Null)
             }
             Request::Settings { patch } => {
+                let decoder = self.settings.video_decoder;
                 self.settings.apply(patch)?;
                 self.audio.set_volume(self.settings.sound_gain());
+                if self.settings.video_decoder != decoder {
+                    crate::video::set_decoder(self.settings.video_decoder);
+                    self.reopen_videos();
+                }
                 Ok(json!(self.settings))
             }
             Request::Seek { output, position } => {
@@ -989,6 +1030,7 @@ impl Host {
                     "assigned": self.assignments.get(&m.name),
                     "video": w.and_then(|w| w.player.as_ref()).map(|p| json!({
                         "codec": p.info.codec,
+                        "decoder": p.decoder(),
                         "size": (p.info.width, p.info.height),
                         "frame_rate": p.info.frame_rate,
                         "duration": p.info.duration,
@@ -996,6 +1038,7 @@ impl Host {
                         "paused": p.is_paused(),
                         "hidden": s.covered || w.is_some_and(|w| w.window.is_none()),
                     })),
+                    "scene_videos": w.map(|w| w.scene_videos.status()),
                     "surface": w.map(|w| json!({
                         "logical_size": m.size(),
                         "buffer_size": m.size(),

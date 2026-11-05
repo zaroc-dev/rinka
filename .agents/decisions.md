@@ -45,7 +45,10 @@ reason here in the same change.
 
 | Decision | Reason |
 | --- | --- |
-| Native on Linux and Windows: ffmpeg-next, software decode, swscale only to planar yuv420p | Widest format coverage; the engine still does the color math. Hardware decode later, measured. |
+| Native on Linux and Windows: ffmpeg-next, swscale only to planar yuv420p | Widest format coverage; the engine still does the color math. |
+| GPU decode first (Linux: NVDEC through CUDA, then VA-API; Windows: D3D11VA), frames copied back as NV12; software fallback | A 4K120 H.264 file took 2.8 cores in software and dropped frames; NVDEC plays it at 0.4 (`docs/m2-video.md`). Copy-back keeps the graphics profile free of optional features (no Vulkan external memory); the engine reads NV12 chroma as one RG plane. |
+| A GPU decoder counts only after it decoded the first frame | FFmpeg's format negotiation silently falls back to software when a device rejects a stream. |
+| `video_decoder` host setting (auto, nvdec, vaapi, d3d11va, software), editor control under Video | Lets the user pick VA-API on Intel/AMD, or software when a driver misbehaves. Changing it reopens playing videos. |
 | Windows FFmpeg SDK/runtime pinned and hash-verified in a local setup script; DLLs beside the host | Reuse the Linux decoder and engine color path; users do not need FFmpeg on PATH. CI packages the same SDK with its notices. |
 | Preview: WebCodecs (`prefer-software`) + mp4box demux, I420 planes to the engine | The only browser path that gives raw planes. `<video>` stays as a labelled fallback. |
 | Matrix and range for the preview come from the native probe | WebCodecs misreports range. |

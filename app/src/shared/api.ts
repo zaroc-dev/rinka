@@ -191,6 +191,16 @@ export interface WorkshopScan {
 export type SceneFps = 15 | 30;
 export const SCENE_FPS_CHOICES: SceneFps[] = [15, 30];
 
+/** Where the host decodes videos. GPU decoders fall back to software for streams they cannot play. */
+export type VideoDecoder = "auto" | "nvdec" | "vaapi" | "d3d11va" | "software";
+export const VIDEO_DECODER_LABELS: Record<VideoDecoder, string> = {
+  auto: "Automatic",
+  nvdec: "NVDEC",
+  vaapi: "VA-API",
+  d3d11va: "Direct3D 11",
+  software: "Software",
+};
+
 /** Editor settings stored in config.json. */
 export interface AppSettings {
   /** Show the tray icon; closing the window then hides it to the tray. */
@@ -200,6 +210,9 @@ export interface AppSettings {
   /** Gain of all scene sound, 0..1. */
   soundVolume: number;
   soundMuted: boolean;
+  videoDecoder: VideoDecoder;
+  /** The decoders this platform offers; not settable. */
+  videoDecoderChoices: VideoDecoder[];
 }
 
 export interface AppInfo {

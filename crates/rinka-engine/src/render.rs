@@ -56,10 +56,13 @@ fn sample_source(uv: vec2<f32>, lod: f32, s: sampler) -> vec4<f32> {
     if params.source_kind == 1u {
         return textureSampleLevel(image, s, uv, lod);
     }
+    // Interleaved chroma is one RG plane beside a zero V plane; planar
+    // chroma reads 0 from the green channel of its R plane.
+    let u = textureSampleLevel(plane_u, s, uv, 0.0);
     let yuv = vec4<f32>(
         textureSampleLevel(plane_y, s, uv, 0.0).r,
-        textureSampleLevel(plane_u, s, uv, 0.0).r,
-        textureSampleLevel(plane_v, s, uv, 0.0).r,
+        u.r,
+        u.g + textureSampleLevel(plane_v, s, uv, 0.0).r,
         1.0,
     );
     let rgb = vec3<f32>(dot(params.yuv_r, yuv), dot(params.yuv_g, yuv), dot(params.yuv_b, yuv));
@@ -243,7 +246,8 @@ pub enum Source<'a> {
     Yuv(&'a VideoTexture),
 }
 
-/// Y, U and V planes of a video frame (8-bit), updated in place.
+/// Y, U and V planes of a video frame (8-bit), updated in place. Interleaved
+/// chroma is one RG plane, and the V plane is a single zero texel.
 pub struct VideoTexture {
     planes: [wgpu::Texture; 3],
     views: [wgpu::TextureView; 3],
@@ -251,6 +255,7 @@ pub struct VideoTexture {
     pub height: u32,
     pub chroma_width: u32,
     pub chroma_height: u32,
+    pub interleaved: bool,
     pub matrix: ColorMatrix,
     pub range: ColorRange,
 }
@@ -265,7 +270,9 @@ impl VideoTexture {
             (frame.u, frame.u_stride, cw, ch),
             (frame.v, frame.v_stride, cw, ch),
         ];
-        for (texture, (data, stride, w, h)) in self.planes.iter().zip(planes) {
+        // The zero V plane of interleaved chroma is never written.
+        let count = if frame.interleaved { 2 } else { 3 };
+        for (texture, (data, stride, w, h)) in self.planes.iter().zip(planes).take(count) {
             queue.write_texture(
                 texture.as_image_copy(),
                 data,
@@ -296,11 +303,13 @@ impl VideoTexture {
             self.height,
             self.chroma_width,
             self.chroma_height,
+            self.interleaved,
         ) == (
             frame.width,
             frame.height,
             frame.chroma_width,
             frame.chroma_height,
+            frame.interleaved,
         )
     }
 }
@@ -491,7 +500,8 @@ impl Renderer {
                 source_size: (1, 1),
             },
         );
-        let placeholder_plane = plane_texture(device, 1, 1).create_view(&Default::default());
+        let placeholder_plane = plane_texture(device, 1, 1, wgpu::TextureFormat::R8Unorm)
+            .create_view(&Default::default());
         Self {
             device: device.clone(),
             format: target_format,
@@ -515,11 +525,17 @@ impl Renderer {
     ) -> VideoTexture {
         let (width, height) = (frame.width, frame.height);
         let (cw, ch) = (frame.chroma_width, frame.chroma_height);
-        let planes = [
-            plane_texture(device, width, height),
-            plane_texture(device, cw, ch),
-            plane_texture(device, cw, ch),
-        ];
+        let planes = if frame.interleaved {
+            [
+                plane_texture(device, width, height, wgpu::TextureFormat::R8Unorm),
+                plane_texture(device, cw, ch, wgpu::TextureFormat::Rg8Unorm),
+                // wgpu zero-initializes textures: Cr adds nothing.
+                plane_texture(device, 1, 1, wgpu::TextureFormat::R8Unorm),
+            ]
+        } else {
+            [(width, height), (cw, ch), (cw, ch)]
+                .map(|(w, h)| plane_texture(device, w, h, wgpu::TextureFormat::R8Unorm))
+        };
         let views = [0, 1, 2].map(|i| planes[i].create_view(&Default::default()));
         VideoTexture {
             planes,
@@ -528,6 +544,7 @@ impl Renderer {
             height,
             chroma_width: cw,
             chroma_height: ch,
+            interleaved: frame.interleaved,
             matrix: frame.matrix,
             range: frame.range,
         }
@@ -1045,7 +1062,12 @@ impl Target {
     }
 }
 
-fn plane_texture(device: &wgpu::Device, width: u32, height: u32) -> wgpu::Texture {
+fn plane_texture(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+    format: wgpu::TextureFormat,
+) -> wgpu::Texture {
     device.create_texture(&wgpu::TextureDescriptor {
         label: Some("rinka video plane"),
         size: wgpu::Extent3d {
@@ -1056,7 +1078,7 @@ fn plane_texture(device: &wgpu::Device, width: u32, height: u32) -> wgpu::Textur
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::R8Unorm,
+        format,
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     })

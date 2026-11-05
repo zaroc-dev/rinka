@@ -7,7 +7,7 @@ import { Readable } from "node:stream";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { SCENE_FPS_CHOICES } from "../shared/api";
-import type { AppSettings, HostState, SceneFps, ImportResult, LibraryEntry, OutputInfo, PreviewReport, Project } from "../shared/api";
+import type { AppSettings, HostState, SceneFps, VideoDecoder, ImportResult, LibraryEntry, OutputInfo, PreviewReport, Project } from "../shared/api";
 import { connectOrSpawn, defaultSocketPath, findHostBinary, type HostConnection } from "./host";
 import { ConfigStore, IMPORT_EXTENSIONS, Library, type StoredEntry } from "./library";
 import { Thumbnails } from "./thumbnails";
@@ -161,7 +161,8 @@ async function rawOutputs(): Promise<RawOutput[]> {
 /** Hands the host-wide playback settings to the host. */
 async function sendHostSettings(): Promise<void> {
   const s = appSettings();
-  await host?.request("settings", { scene_fps: s.sceneFps, volume: s.soundVolume, muted: s.soundMuted }).catch((e: Error) => {
+  const patch = { scene_fps: s.sceneFps, volume: s.soundVolume, muted: s.soundMuted, video_decoder: s.videoDecoder };
+  await host?.request("settings", patch).catch((e: Error) => {
     console.warn("host settings:", e.message);
   });
 }
@@ -313,9 +314,13 @@ function registerIpc(): void {
       config.config.soundVolume = patch.soundVolume;
     }
     if (typeof patch.soundMuted === "boolean") config.config.soundMuted = patch.soundMuted;
+    if (patch.videoDecoder !== undefined && VIDEO_DECODER_CHOICES.includes(patch.videoDecoder)) {
+      config.config.videoDecoder = patch.videoDecoder;
+    }
     config.save();
     updateTray();
-    if (patch.sceneFps !== undefined || patch.soundVolume !== undefined || patch.soundMuted !== undefined) {
+    const hostPatch = [patch.sceneFps, patch.soundVolume, patch.soundMuted, patch.videoDecoder];
+    if (hostPatch.some((v) => v !== undefined)) {
       await sendHostSettings();
     }
     return appSettings();
@@ -458,14 +463,21 @@ function showWindow(): void {
 
 // ---- tray and settings -----------------------------------------------------------
 
+/** The host's decoders on this platform (see settings.rs). */
+const VIDEO_DECODER_CHOICES: VideoDecoder[] =
+  process.platform === "win32" ? ["auto", "d3d11va", "software"] : ["auto", "nvdec", "vaapi", "software"];
+
 function appSettings(): AppSettings {
   const fps = config.config.sceneFps as SceneFps;
   const volume = config.config.soundVolume;
+  const decoder = config.config.videoDecoder as VideoDecoder;
   return {
     trayIcon: config.config.trayIcon !== false,
     sceneFps: SCENE_FPS_CHOICES.includes(fps) ? fps : 30,
     soundVolume: typeof volume === "number" && volume >= 0 && volume <= 1 ? volume : 0.5,
     soundMuted: config.config.soundMuted === true,
+    videoDecoder: VIDEO_DECODER_CHOICES.includes(decoder) ? decoder : "auto",
+    videoDecoderChoices: VIDEO_DECODER_CHOICES,
   };
 }
 

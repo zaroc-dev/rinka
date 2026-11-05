@@ -22,7 +22,9 @@ unexplained mismatch on validated scenes.
 
 - Color: exact; preview and native identical (`#1e6f73` → `rgb(30,111,115)`;
   video BT.709 → (28,109,113), BT.601 full → (29,111,113), 4:4:4 → (29,110,114)).
-- Video: VFR worst error 1.1 ms; 1080p30 at ~10–16% of one core.
+- Video: VFR worst error 1.1 ms; 1080p30 at ~10–16% of one core in
+  software. GPU decoding (NVDEC/VA-API/D3D11VA): 4K120 H.264 at 0.37 cores
+  with NVDEC against 2.2 in software (`docs/m2-video.md`).
 - Static host: ~30 ms CPU per 10 s.
 - Import (36 local workshop items: 33 scenes, 2 videos, 1 web):
   - all 564 packaged and 311 built-in textures decode;
@@ -117,8 +119,9 @@ scenes each.
 - Wayland host decodes images on its main thread (blocks the loop on large
   images). The Windows host renders off the window thread but still decodes
   on its render thread.
-- Hardware video decode; MKV/WebM in the preview (WebCodecs needs a demuxer);
-  HDR and 10-bit video.
+- Hardware video decode: VA-API on Intel/AMD and D3D11VA on Windows are
+  untested; frames still round-trip through memory. MKV/WebM in the preview
+  (WebCodecs needs a demuxer); HDR and 10-bit video.
 - Asset content hashes in the project manifest.
 - CI builds only on version tags (`.github/workflows/release.yml`); no build
   or test workflow on pull requests. GPU tests would need a GPU runner.

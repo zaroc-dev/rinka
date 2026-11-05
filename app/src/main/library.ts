@@ -266,6 +266,8 @@ export interface Config {
   /** Scene sound gain 0..1 (default 0.5) and mute; read by the host too. */
   soundVolume?: number;
   soundMuted?: boolean;
+  /** A VideoDecoder name (default "auto"); read by the host too. */
+  videoDecoder?: string;
 }
 
 export class ConfigStore {

@@ -3,12 +3,47 @@
 
 use std::time::{Duration, Instant};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::protocol::{Error, ErrorCode};
 
 /// Frame rates animated scenes may run at.
 const SCENE_FPS: std::ops::RangeInclusive<u32> = 1..=60;
+
+/// Where videos are decoded.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VideoDecoder {
+    /// The first GPU decoder that works for the stream, else software.
+    #[default]
+    Auto,
+    /// NVIDIA's decoder, through CUDA (Linux).
+    Nvdec,
+    /// VA-API: Intel and AMD, or NVIDIA through a translation driver (Linux).
+    Vaapi,
+    /// Direct3D 11 (Windows).
+    D3d11va,
+    Software,
+}
+
+impl VideoDecoder {
+    /// The choices on this platform.
+    pub const AVAILABLE: &[Self] = if cfg!(windows) {
+        &[Self::Auto, Self::D3d11va, Self::Software]
+    } else {
+        &[Self::Auto, Self::Nvdec, Self::Vaapi, Self::Software]
+    };
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Nvdec => "nvdec",
+            Self::Vaapi => "vaapi",
+            Self::D3d11va => "d3d11va",
+            Self::Software => "software",
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct HostSettings {
@@ -17,6 +52,9 @@ pub struct HostSettings {
     /// Gain of all scene sound, 0..=1.
     pub volume: f32,
     pub muted: bool,
+    /// Where videos are decoded. A GPU decoder that cannot play a stream
+    /// falls back to software.
+    pub video_decoder: VideoDecoder,
 }
 
 impl Default for HostSettings {
@@ -25,6 +63,7 @@ impl Default for HostSettings {
             scene_fps: 30,
             volume: 0.5,
             muted: false,
+            video_decoder: VideoDecoder::Auto,
         }
     }
 }
@@ -35,6 +74,7 @@ pub struct SettingsPatch {
     pub scene_fps: Option<u32>,
     pub volume: Option<f32>,
     pub muted: Option<bool>,
+    pub video_decoder: Option<VideoDecoder>,
 }
 
 impl HostSettings {
@@ -51,7 +91,16 @@ impl HostSettings {
         {
             return bad(format!("volume must be within 0..=1, got {v}"));
         }
+        if let Some(d) = patch.video_decoder
+            && !VideoDecoder::AVAILABLE.contains(&d)
+        {
+            return bad(format!(
+                "video_decoder {} is not available on this platform",
+                d.name()
+            ));
+        }
         self.scene_fps = patch.scene_fps.unwrap_or(self.scene_fps);
+        self.video_decoder = patch.video_decoder.unwrap_or(self.video_decoder);
         self.volume = patch.volume.unwrap_or(self.volume);
         self.muted = patch.muted.unwrap_or(self.muted);
         Ok(())
@@ -123,5 +172,25 @@ mod tests {
         assert_eq!(s.sound_gain(), 0.0);
         s.muted = false;
         assert_eq!(s.sound_gain(), 0.8);
+    }
+
+    #[test]
+    fn video_decoders_are_checked_against_the_platform() {
+        let mut s = HostSettings::default();
+        let pick = |d| SettingsPatch {
+            video_decoder: Some(d),
+            ..Default::default()
+        };
+        s.apply(pick(VideoDecoder::Software)).unwrap();
+        assert_eq!(s.video_decoder, VideoDecoder::Software);
+        let foreign = if cfg!(windows) {
+            VideoDecoder::Vaapi
+        } else {
+            VideoDecoder::D3d11va
+        };
+        assert!(s.apply(pick(foreign)).is_err());
+        assert_eq!(s.video_decoder, VideoDecoder::Software);
+        let patch: SettingsPatch = serde_json::from_str(r#"{"video_decoder":"nvdec"}"#).unwrap();
+        assert_eq!(patch.video_decoder, Some(VideoDecoder::Nvdec));
     }
 }

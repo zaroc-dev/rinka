@@ -5,14 +5,21 @@
 //! decoder until frames are consumed. Other pixel formats are converted with
 //! swscale, keeping the stream's color matrix and range.
 //!
+//! Players decode on the GPU when they can (NVDEC through CUDA, then VA-API
+//! on Linux; D3D11VA on Windows) and copy frames back as NV12, which the
+//! engine converts like planar frames. A device counts only once it decoded
+//! the first frame itself; otherwise the player decodes in software. The
+//! host's `video_decoder` setting picks one device or software instead.
+//!
 //! Timestamps come from the stream (best-effort PTS), so variable frame rate
 //! plays at its authored timing. Looping continues the timeline: each pass
 //! adds the stream's length to its timestamps instead of resetting the
 //! clock. Playback is muted; audio streams are ignored.
 
 use std::path::{Path, PathBuf};
-use std::sync::Once;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TryRecvError, TrySendError};
+use std::sync::{Arc, Once, OnceLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -21,6 +28,8 @@ use ffmpeg::format::Pixel;
 use ffmpeg::util::color;
 use ffmpeg_next as ffmpeg;
 use rinka_engine::{ColorMatrix, ColorRange, YuvFrame};
+
+use crate::settings::VideoDecoder;
 
 /// Decoded frames buffered ahead of presentation.
 const QUEUE_FRAMES: usize = 6;
@@ -52,24 +61,52 @@ pub struct OwnedFrame {
     generation: u64,
     pub width: u32,
     pub height: u32,
-    planes: [(Vec<u8>, u32); 3],
+    planes: Planes,
     pub matrix: ColorMatrix,
     pub range: ColorRange,
 }
 
+/// Where a frame's planes live.
+#[derive(Clone)]
+enum Planes {
+    /// A reference to FFmpeg's buffers (YUV420P or NV12): frames reach the
+    /// GPU upload without another copy.
+    Frame(ffmpeg::frame::Video),
+    /// Plane data and strides.
+    #[cfg(test)]
+    Owned([(Vec<u8>, u32); 3]),
+}
+
 impl OwnedFrame {
     pub fn as_yuv(&self) -> YuvFrame<'_> {
+        let (cw, ch) = (self.width.div_ceil(2), self.height.div_ceil(2));
+        let (planes, interleaved): ([(&[u8], u32); 3], bool) = match &self.planes {
+            Planes::Frame(frame) => {
+                let plane = |i: usize, rows: u32| {
+                    let stride = frame.stride(i);
+                    (&frame.data(i)[..stride * rows as usize], stride as u32)
+                };
+                if frame.format() == Pixel::NV12 {
+                    ([plane(0, self.height), plane(1, ch), (&[], 0)], true)
+                } else {
+                    ([plane(0, self.height), plane(1, ch), plane(2, ch)], false)
+                }
+            }
+            #[cfg(test)]
+            Planes::Owned(p) => (p.each_ref().map(|(d, s)| (d.as_slice(), *s)), false),
+        };
         YuvFrame {
             width: self.width,
             height: self.height,
-            chroma_width: self.width.div_ceil(2),
-            chroma_height: self.height.div_ceil(2),
-            y: &self.planes[0].0,
-            y_stride: self.planes[0].1,
-            u: &self.planes[1].0,
-            u_stride: self.planes[1].1,
-            v: &self.planes[2].0,
-            v_stride: self.planes[2].1,
+            chroma_width: cw,
+            chroma_height: ch,
+            y: planes[0].0,
+            y_stride: planes[0].1,
+            u: planes[1].0,
+            u_stride: planes[1].1,
+            v: planes[2].0,
+            v_stride: planes[2].1,
+            interleaved,
             matrix: self.matrix,
             range: self.range,
         }
@@ -84,6 +121,70 @@ struct Source {
     decoder: ffmpeg::decoder::Video,
     scaler: Option<Scaler>,
     info: VideoInfo,
+    /// The pixel format of frames still on the GPU, when decoding there.
+    hw_format: Option<Pixel>,
+    /// Software or the GPU decoder, never `auto`.
+    decoded_by: VideoDecoder,
+}
+
+/// The decoder players opened from now on use (a [`VideoDecoder`] index).
+static PREFERENCE: AtomicU8 = AtomicU8::new(0);
+
+/// Sets where players opened from now on decode.
+pub fn set_decoder(decoder: VideoDecoder) {
+    let index = VideoDecoder::AVAILABLE
+        .iter()
+        .position(|&d| d == decoder)
+        .unwrap_or(0);
+    PREFERENCE.store(index as u8, Ordering::Relaxed);
+}
+
+fn preference() -> VideoDecoder {
+    VideoDecoder::AVAILABLE
+        .get(usize::from(PREFERENCE.load(Ordering::Relaxed)))
+        .copied()
+        .unwrap_or_default()
+}
+
+/// GPU decoders to try for `preference`, in order.
+fn hw_devices(preference: VideoDecoder) -> Vec<(VideoDecoder, ffmpeg::ffi::AVHWDeviceType)> {
+    use ffmpeg::ffi::AVHWDeviceType::*;
+    let all: &[_] = if cfg!(windows) {
+        &[(VideoDecoder::D3d11va, AV_HWDEVICE_TYPE_D3D11VA)]
+    } else {
+        // CUDA fails fast without NVIDIA's driver; VA-API on NVIDIA goes
+        // through a translation driver and costs more CPU.
+        &[
+            (VideoDecoder::Nvdec, AV_HWDEVICE_TYPE_CUDA),
+            (VideoDecoder::Vaapi, AV_HWDEVICE_TYPE_VAAPI),
+        ]
+    };
+    match preference {
+        VideoDecoder::Auto => all.to_vec(),
+        one => all.iter().copied().filter(|&(d, _)| d == one).collect(),
+    }
+}
+
+/// The pixel format `codec` decodes into on a `kind` device, if it can.
+fn hw_pixel_format(
+    codec: *const ffmpeg::ffi::AVCodec,
+    kind: ffmpeg::ffi::AVHWDeviceType,
+) -> Option<Pixel> {
+    for i in 0.. {
+        // SAFETY: FFmpeg returns null past the last configuration.
+        let config = unsafe { ffmpeg::ffi::avcodec_get_hw_config(codec, i) };
+        if config.is_null() {
+            return None;
+        }
+        // SAFETY: non-null configurations are static.
+        let config = unsafe { &*config };
+        if config.device_type == kind
+            && config.methods & ffmpeg::ffi::AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX as i32 != 0
+        {
+            return Some(config.pix_fmt.into());
+        }
+    }
+    None
 }
 
 struct Scaler {
@@ -95,7 +196,65 @@ struct Scaler {
 }
 
 impl Source {
-    fn open(path: &Path) -> anyhow::Result<Self> {
+    /// Opens `path` on the first GPU decoder that decodes its first frame,
+    /// or in software.
+    fn open_accelerated(path: &Path, preference: VideoDecoder) -> anyhow::Result<Self> {
+        for device in hw_devices(preference) {
+            match Self::open(path, Some(device)).and_then(|mut s| {
+                s.check_hardware()?;
+                Ok(s)
+            }) {
+                Ok(source) => return Ok(source),
+                Err(e) => log::info!(
+                    "{}: not decoding with {}: {e:#}",
+                    path.display(),
+                    device.0.name()
+                ),
+            }
+        }
+        Self::open(path, None)
+    }
+
+    /// Decodes the first frame and rewinds; fails unless it was decoded
+    /// on the GPU. FFmpeg falls back to software on its own when the device
+    /// rejects a stream (profile, size), so a device opening is no proof.
+    fn check_hardware(&mut self) -> anyhow::Result<()> {
+        let mut frame = ffmpeg::frame::Video::empty();
+        let mut decoded = false;
+        while let Some(packet) = self
+            .input
+            .packets()
+            .find(|(stream, _)| stream.index() == self.stream)
+            .map(|(_, packet)| packet)
+        {
+            if self.decoder.send_packet(&packet).is_ok()
+                && self.decoder.receive_frame(&mut frame).is_ok()
+            {
+                decoded = true;
+                break;
+            }
+        }
+        if !decoded {
+            self.decoder.send_eof()?;
+            self.decoder
+                .receive_frame(&mut frame)
+                .context("no decodable frame")?;
+        }
+        anyhow::ensure!(
+            Some(frame.format()) == self.hw_format,
+            "the decoder fell back to software ({:?})",
+            frame.format()
+        );
+        // Prove the copy back works too.
+        Self::download(&frame)?;
+        self.rewind()
+    }
+
+    /// Opens `path`, decoding on a `hw` device when given.
+    fn open(
+        path: &Path,
+        hw: Option<(VideoDecoder, ffmpeg::ffi::AVHWDeviceType)>,
+    ) -> anyhow::Result<Self> {
         init();
         let input =
             ffmpeg::format::input(path).with_context(|| format!("opening {}", path.display()))?;
@@ -111,9 +270,39 @@ impl Source {
             stream.start_time()
         };
         let mut context = ffmpeg::codec::context::Context::from_parameters(stream.parameters())?;
-        context.set_threading(ffmpeg::codec::threading::Config::kind(
-            ffmpeg::codec::threading::Type::Frame,
-        ));
+        let mut hw_format = None;
+        if let Some((decoder, kind)) = hw {
+            let codec = ffmpeg::decoder::find(context.id())
+                .ok_or_else(|| anyhow!("no decoder for {:?}", context.id()))?;
+            // SAFETY: codecs are static FFmpeg descriptors.
+            let codec_ptr = unsafe { codec.as_ptr() };
+            hw_format = Some(
+                hw_pixel_format(codec_ptr, kind)
+                    .ok_or_else(|| anyhow!("{} cannot decode {}", decoder.name(), codec.name()))?,
+            );
+            let mut device = std::ptr::null_mut();
+            // SAFETY: creates a reference-counted device; on success the
+            // codec context takes its own reference and ours is released.
+            unsafe {
+                let r = ffmpeg::ffi::av_hwdevice_ctx_create(
+                    &mut device,
+                    kind,
+                    std::ptr::null(),
+                    std::ptr::null_mut(),
+                    0,
+                );
+                anyhow::ensure!(r >= 0, "opening the device: {}", ffmpeg::Error::from(r));
+                (*context.as_mut_ptr()).hw_device_ctx = ffmpeg::ffi::av_buffer_ref(device);
+                ffmpeg::ffi::av_buffer_unref(&mut device);
+            }
+            // With a device set FFmpeg's default format negotiation picks
+            // its pixel format. The GPU does the work: no frame threads.
+            context.set_threading(ffmpeg::codec::threading::Config::count(1));
+        } else {
+            context.set_threading(ffmpeg::codec::threading::Config::kind(
+                ffmpeg::codec::threading::Type::Frame,
+            ));
+        }
         let decoder = context
             .decoder()
             .video()
@@ -143,10 +332,50 @@ impl Source {
             decoder,
             scaler: None,
             info,
+            hw_format,
+            decoded_by: hw.map_or(VideoDecoder::Software, |(d, _)| d),
         })
     }
 
-    /// Converts a decoded frame to owned 8-bit 4:2:0 planes.
+    /// Copies a GPU frame to memory (NV12 for 8-bit streams) with its
+    /// timestamps and color tags.
+    fn download(frame: &ffmpeg::frame::Video) -> anyhow::Result<ffmpeg::frame::Video> {
+        let mut out = ffmpeg::frame::Video::empty();
+        // SAFETY: both frames are live; the transfer allocates `out`'s
+        // buffers.
+        unsafe {
+            let r = ffmpeg::ffi::av_hwframe_transfer_data(out.as_mut_ptr(), frame.as_ptr(), 0);
+            anyhow::ensure!(
+                r >= 0,
+                "copying the frame from the GPU: {}",
+                ffmpeg::Error::from(r)
+            );
+            let r = ffmpeg::ffi::av_frame_copy_props(out.as_mut_ptr(), frame.as_ptr());
+            anyhow::ensure!(
+                r >= 0,
+                "copying frame properties: {}",
+                ffmpeg::Error::from(r)
+            );
+        }
+        Ok(out)
+    }
+
+    /// Converts a decoded frame, on the GPU or in memory, to owned planes.
+    fn own_decoded(
+        &mut self,
+        frame: &ffmpeg::frame::Video,
+        pts: f64,
+        generation: u64,
+    ) -> anyhow::Result<OwnedFrame> {
+        if self.hw_format.is_some_and(|f| f == frame.format()) {
+            self.own(&Self::download(frame)?, pts, generation)
+        } else {
+            self.own(frame, pts, generation)
+        }
+    }
+
+    /// Converts a decoded frame to 8-bit 4:2:0 planes it keeps a reference
+    /// to.
     fn own(
         &mut self,
         frame: &ffmpeg::frame::Video,
@@ -179,9 +408,15 @@ impl Source {
             ColorRange::Limited
         };
 
-        let converted;
-        let source = if matches!(frame.format(), Pixel::YUV420P | Pixel::YUVJ420P) {
-            frame
+        let source = if matches!(
+            frame.format(),
+            Pixel::YUV420P | Pixel::YUVJ420P | Pixel::NV12
+        ) {
+            let mut reference = ffmpeg::frame::Video::empty();
+            // SAFETY: decoded and transferred frames are reference-counted.
+            let r = unsafe { ffmpeg::ffi::av_frame_ref(reference.as_mut_ptr(), frame.as_ptr()) };
+            anyhow::ensure!(r >= 0, "referencing a frame: {}", ffmpeg::Error::from(r));
+            reference
         } else {
             let (fmt, w, h) = (frame.format(), frame.width(), frame.height());
             if self.scaler.as_ref().is_none_or(|s| {
@@ -235,22 +470,15 @@ impl Source {
                 .expect("scaler")
                 .context
                 .run(frame, &mut out)?;
-            converted = out;
-            &converted
-        };
-        let (w, h) = (source.width(), source.height());
-        let ch = h.div_ceil(2) as usize;
-        let plane = |i: usize, rows: usize| {
-            let stride = source.stride(i);
-            (source.data(i)[..stride * rows].to_vec(), stride as u32)
+            out
         };
         Ok(OwnedFrame {
             pts,
             file_pts,
             generation,
-            width: w,
-            height: h,
-            planes: [plane(0, h as usize), plane(1, ch), plane(2, ch)],
+            width: source.width(),
+            height: source.height(),
+            planes: Planes::Frame(source),
             matrix,
             range,
         })
@@ -282,7 +510,7 @@ impl Source {
 /// Reads stream properties without decoding.
 #[cfg(target_os = "linux")]
 pub fn probe(path: &Path) -> anyhow::Result<VideoInfo> {
-    Ok(Source::open(path)?.info)
+    Ok(Source::open(path, None)?.info)
 }
 
 /// Probes a video texture for import: its size, the matrix and range its
@@ -314,7 +542,7 @@ pub fn probe_texture(bytes: &[u8]) -> anyhow::Result<rinka_import::VideoProbe> {
 
 /// Decodes the first frame, for thumbnails.
 pub fn first_frame(path: &Path) -> anyhow::Result<(VideoInfo, OwnedFrame)> {
-    let mut source = Source::open(path)?;
+    let mut source = Source::open(path, None)?;
     let mut frame = ffmpeg::frame::Video::empty();
     while let Some(packet) = source
         .input
@@ -350,19 +578,26 @@ struct Decoder {
     frames: Receiver<OwnedFrame>,
     control: Sender<Control>,
     thread: Option<JoinHandle<()>>,
+    /// Set by the thread once it chose where to decode.
+    decoder: Arc<OnceLock<VideoDecoder>>,
 }
 
 impl Decoder {
     fn spawn(path: PathBuf) -> anyhow::Result<(Self, VideoInfo)> {
+        let preference = preference();
         let (tx, frames) = mpsc::sync_channel(QUEUE_FRAMES);
         let (control, control_rx) = mpsc::channel();
         let (opened_tx, opened) = mpsc::channel();
+        let decoder = Arc::new(OnceLock::new());
+        let chosen = decoder.clone();
         // FFmpeg contexts are not Send: open the source on the thread that
-        // decodes it and report back.
+        // decodes it and report back. The caller waits only for a software
+        // open (stream info, errors); a GPU decoder takes 100-300 ms to set
+        // up and test, which would stall the host's event loop.
         let thread = std::thread::Builder::new()
             .name("rinka-video".into())
             .spawn(move || {
-                let source = match Source::open(&path) {
+                let source = match Source::open(&path, None) {
                     Ok(s) => s,
                     Err(e) => {
                         let _ = opened_tx.send(Err(e));
@@ -370,6 +605,16 @@ impl Decoder {
                     }
                 };
                 let _ = opened_tx.send(Ok(source.info.clone()));
+                let source = if hw_devices(preference).is_empty() {
+                    source
+                } else {
+                    drop(source);
+                    match Source::open_accelerated(&path, preference) {
+                        Ok(s) => s,
+                        Err(e) => return log::error!("video {}: {e:#}", path.display()),
+                    }
+                };
+                let _ = chosen.set(source.decoded_by);
                 if let Err(e) = decode_loop(source, &tx, &control_rx) {
                     log::error!("video {}: {e:#}", path.display());
                 }
@@ -382,6 +627,7 @@ impl Decoder {
                 frames,
                 control,
                 thread: Some(thread),
+                decoder,
             },
             info,
         ))
@@ -506,7 +752,7 @@ fn decode_loop(
             let step = last_pts.map_or(1.0 / 30.0, |p| (pts - p).clamp(1e-3, 1.0));
             last_pts = Some(pts);
             pass_end = pass_end.max(pts + step);
-            let owned = source.own(&frame, offset + pts, generation)?;
+            let owned = source.own_decoded(&frame, offset + pts, generation)?;
             match send(owned, &mut generation, &mut source)? {
                 None => return Ok(()),
                 Some(t) if !t.is_nan() => {
@@ -585,6 +831,11 @@ impl Player {
             self.pending = Some(frame);
         }
         Ok(self.pending.clone().expect("pending frame"))
+    }
+
+    /// Where the video decodes, once the decode thread has chosen.
+    pub fn decoder(&self) -> Option<VideoDecoder> {
+        self.decoder.decoder.get().copied()
     }
 
     /// The decode thread ended (it logged why). Hosts keep the last frame
@@ -760,6 +1011,22 @@ impl SceneVideos {
         self.videos.is_empty()
     }
 
+    /// Each video texture's path and stream, for status requests.
+    pub fn status(&self) -> Vec<serde_json::Value> {
+        self.videos
+            .iter()
+            .map(|v| {
+                serde_json::json!({
+                    "path": v.path,
+                    "codec": v.player.info.codec,
+                    "decoder": v.player.decoder(),
+                    "size": (v.player.info.width, v.player.info.height),
+                    "frame_rate": v.player.info.frame_rate,
+                })
+            })
+            .collect()
+    }
+
     /// Whether these players play exactly `files`.
     pub fn plays(&self, files: &[(String, PathBuf)]) -> bool {
         self.videos.len() == files.len()
@@ -830,7 +1097,7 @@ mod tests {
             generation,
             width: 2,
             height: 2,
-            planes: [(vec![97; 4], 2), (vec![138], 1), (vec![90], 1)],
+            planes: Planes::Owned([(vec![97; 4], 2), (vec![138], 1), (vec![90], 1)]),
             matrix: ColorMatrix::Bt709,
             range: ColorRange::Limited,
         }
@@ -845,6 +1112,7 @@ mod tests {
                     frames,
                     control,
                     thread: None,
+                    decoder: Arc::default(),
                 },
                 info: VideoInfo {
                     width: 2,
@@ -1091,6 +1359,97 @@ mod tests {
         player.seek(20.0, Instant::now());
         let frame = next_frame(&mut player);
         assert!(frame.file_pts > 1.1 && frame.file_pts < 1.2);
+    }
+
+    /// Every frame of `source`, in presentation order.
+    fn decode_all(mut source: Source) -> Vec<OwnedFrame> {
+        let mut frames = Vec::new();
+        let mut frame = ffmpeg::frame::Video::empty();
+        let mut drain = |source: &mut Source, frames: &mut Vec<OwnedFrame>| {
+            while source.decoder.receive_frame(&mut frame).is_ok() {
+                let pts = source.pts_of(&frame);
+                frames.push(source.own_decoded(&frame, pts, 0).unwrap());
+            }
+        };
+        while let Some(packet) = source
+            .input
+            .packets()
+            .find(|(stream, _)| stream.index() == source.stream)
+            .map(|(_, packet)| packet)
+        {
+            source.decoder.send_packet(&packet).unwrap();
+            drain(&mut source, &mut frames);
+        }
+        source.decoder.send_eof().unwrap();
+        drain(&mut source, &mut frames);
+        frames
+    }
+
+    /// Y, Cb and Cr samples of a 4:2:0 frame, planar and without padding.
+    fn samples(frame: &OwnedFrame) -> [Vec<u8>; 3] {
+        let yuv = frame.as_yuv();
+        let rows = |data: &[u8], stride: u32, width: u32, height: u32, step: usize, at: usize| {
+            (0..height as usize)
+                .flat_map(|r| {
+                    let row = &data[r * stride as usize..];
+                    (0..width as usize).map(move |x| row[x * step + at])
+                })
+                .collect::<Vec<u8>>()
+        };
+        let (cw, ch) = (yuv.chroma_width, yuv.chroma_height);
+        let y = rows(yuv.y, yuv.y_stride, yuv.width, yuv.height, 1, 0);
+        if yuv.interleaved {
+            [
+                y,
+                rows(yuv.u, yuv.u_stride, cw, ch, 2, 0),
+                rows(yuv.u, yuv.u_stride, cw, ch, 2, 1),
+            ]
+        } else {
+            [
+                y,
+                rows(yuv.u, yuv.u_stride, cw, ch, 1, 0),
+                rows(yuv.v, yuv.v_stride, cw, ch, 1, 0),
+            ]
+        }
+    }
+
+    #[test]
+    #[ignore = "requires generated video fixtures and a hardware decoder"]
+    fn hardware_frames_match_software_frames() {
+        let mut checked = 0;
+        for name in ["bframes.mp4", "preview-full.mp4"] {
+            let path = fixture(name);
+            let software = decode_all(Source::open(&path, None).unwrap());
+            assert!(!software.is_empty(), "{name}");
+            for kind in hw_devices(VideoDecoder::Auto) {
+                let device = kind.0.name();
+                let source = match Source::open(&path, Some(kind)).and_then(|mut s| {
+                    s.check_hardware()?;
+                    Ok(s)
+                }) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        eprintln!("{name}: skipping {device}: {e:#}");
+                        continue;
+                    }
+                };
+                let hardware = decode_all(source);
+                assert_eq!(hardware.len(), software.len(), "{name} {device}");
+                for (h, s) in hardware.iter().zip(&software) {
+                    assert!(h.as_yuv().interleaved, "{name} {device}: not NV12");
+                    assert_eq!(h.file_pts, s.file_pts, "{name} {device}");
+                    assert_eq!((h.matrix, h.range), (s.matrix, s.range), "{name} {device}");
+                    // H.264 decoding is exact: the GPU must give the same codes.
+                    assert!(
+                        samples(h) == samples(s),
+                        "{name} {device} at {}",
+                        h.file_pts
+                    );
+                }
+                checked += 1;
+            }
+        }
+        assert!(checked > 0, "no hardware decoder could be tested");
     }
 
     #[test]
