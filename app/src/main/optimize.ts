@@ -2,7 +2,7 @@
 // (`rinka-host transcode`) and points the project at the result. The original
 // file stays in the project so the change can be undone.
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, renameSync, rmSync, statSync } from "node:fs";
+import { existsSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
 import path from "node:path";
 import type { OptimizeOptions, VideoEncoder, VideoFileInfo } from "../shared/api";
 
@@ -44,6 +44,19 @@ function run(bin: string, args: string[], onLine?: (line: string) => void): { ch
     });
   });
   return { child, done };
+}
+
+/** Re-encoded copies of `original` in `dir` (names from `optimizedName`). */
+export function optimizedCopies(dir: string, original: string): string[] {
+  const stem = path.basename(original, path.extname(original)).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(`^${stem}-\\d+p\\d*(-\\d+)?\\.mp4$`);
+  try {
+    return readdirSync(path.join(dir, "assets"))
+      .filter((f) => pattern.test(f))
+      .map((f) => `assets/${f}`);
+  } catch {
+    return [];
+  }
 }
 
 /** Asset name for the re-encoded copy of `original`, not yet in `dir`. */

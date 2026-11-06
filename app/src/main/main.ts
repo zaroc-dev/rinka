@@ -10,7 +10,7 @@ import { SCENE_FPS_CHOICES } from "../shared/api";
 import type { AppSettings, HostState, SceneFps, VideoDecoder, VideoEncoder, VideoFiles, OptimizeOptions, OptimizeResult, ImportResult, LibraryEntry, OutputInfo, PreviewReport, Project } from "../shared/api";
 import { connectOrSpawn, defaultSocketPath, findHostBinary, type HostConnection } from "./host";
 import { ConfigStore, IMPORT_EXTENSIONS, Library, type StoredEntry } from "./library";
-import { optimizedName, VideoOptimizer } from "./optimize";
+import { optimizedCopies, optimizedName, VideoOptimizer } from "./optimize";
 import { Thumbnails } from "./thumbnails";
 import { AppTray } from "./tray";
 import { Workshop, workshopFolder } from "./workshop";
@@ -261,6 +261,14 @@ function registerIpc(): void {
     return importFiles(paths);
   });
   ipcMain.handle("library:save", async (_e, id: string, project: Project) => {
+    // Only optimize and restore change which file a video plays; an editor
+    // draft from before one of them must not switch it back.
+    const disk = library.get(id).project.content;
+    const c = project.content;
+    if (disk.type === "video" && c.type === "video") {
+      const { original: _, ...rest } = c;
+      project = { ...project, content: { ...rest, source: disk.source, ...(disk.original ? { original: disk.original } : {}) } };
+    }
     library.save(id, project);
     refreshThumbnails(600);
     // Outputs showing this project pick up the edit; others ignore it.
@@ -299,7 +307,10 @@ function registerIpc(): void {
     if (content.type !== "video") throw new Error("the wallpaper changed while its video was optimized");
     const previous = content.source;
     library.save(id, { ...now.project, content: { ...content, source: name, original } });
-    if (previous !== original && previous !== name) rmSync(path.join(now.dir, previous), { force: true });
+    // The previous copy, and any a stale save left behind.
+    for (const copy of new Set([previous, ...optimizedCopies(now.dir, original)])) {
+      if (copy !== original && copy !== name) rmSync(path.join(now.dir, copy), { force: true });
+    }
     await afterVideoChange(id);
     return {
       entry: toEntry(library.get(id)),
@@ -316,7 +327,9 @@ function registerIpc(): void {
     if (!existsSync(path.join(entry.dir, c.original))) throw new Error("the original file is missing");
     const { original, ...rest } = c;
     library.save(id, { ...entry.project, content: { ...rest, source: original } });
-    if (c.source !== original) rmSync(path.join(entry.dir, c.source), { force: true });
+    for (const copy of new Set([c.source, ...optimizedCopies(entry.dir, original)])) {
+      if (copy !== original) rmSync(path.join(entry.dir, copy), { force: true });
+    }
     await afterVideoChange(id);
     return toEntry(library.get(id));
   });
