@@ -16,6 +16,36 @@ struct Gpu {
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
+#[test]
+fn shell_capture_preserves_output_placement_and_rgba_channels() {
+    let Some(g) = gpu() else { return };
+    let project = image_project(Fit::Center, Srgb8::new(30, 111, 115));
+    let image = RgbaImage::from_fn(4, 2, |x, y| {
+        Rgba([200, (x * 40) as u8, (y * 90) as u8, 255])
+    });
+    let size = (5, 3);
+    let output_size = (10, 6);
+    let expected: Vec<u8> = render(&g, &project, Some(&image), size, output_size)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .collect();
+    for format in [FORMAT, wgpu::TextureFormat::Bgra8Unorm] {
+        let renderer = Renderer::new(&g.device, &g.queue, format.add_srgb_suffix());
+        let data = wimage::decode(&png(&image)).unwrap();
+        let image = renderer.upload_image(&g.device, &g.queue, &data);
+        let mut target = renderer.create_target(&g.device, &project, Some(Source::Image(&image)));
+        let actual = rinka_engine::capture::Capture {
+            size,
+            output_size,
+            time: 0.0,
+            format,
+        }
+        .read(&g.device, &g.queue, &renderer, &mut target);
+        assert_eq!(actual, expected, "{format:?}");
+    }
+}
+
 fn gpu() -> Option<Gpu> {
     let instance =
         wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());

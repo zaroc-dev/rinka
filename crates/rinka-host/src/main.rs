@@ -29,6 +29,8 @@ mod niri;
 mod restore;
 #[cfg(any(target_os = "linux", windows))]
 mod settings;
+#[cfg(target_os = "linux")]
+mod shell_colors;
 #[cfg(any(target_os = "linux", windows))]
 mod transcode;
 #[cfg(any(target_os = "linux", windows))]

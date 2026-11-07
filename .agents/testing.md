@@ -129,6 +129,14 @@ WAYLAND_DISPLAY=wayland-2 NIRI_SOCKET=/run/user/1000/niri.wayland-2.PID.sock \
 Then `niri msg action open-overview` and `grim` against the nested display.
 Remove the stale `wayland-2` socket files after killing it.
 
+A nested niri window on a workspace you are not looking at gets throttled
+frame callbacks, so videos pause as hidden. For timing that needs unthrottled
+callbacks without showing a window, use a headless Sway:
+`WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 nix run nixpkgs#sway -- -c
+conf` with `output HEADLESS-1 resolution 1280x720` in `conf`, run with
+`NIRI_SOCKET`, `SWAYSOCK` and `WAYLAND_DISPLAY` unset. Its output is
+`HEADLESS-1`. It is not a niri check.
+
 The editor can run there too, isolated from the real library and host:
 `env -u ELECTRON_RUN_AS_NODE WAYLAND_DISPLAY=/run/user/1000/wayland-2
 RINKA_USER_DATA=/tmp/ud XDG_RUNTIME_DIR=/tmp/rt nix develop -c

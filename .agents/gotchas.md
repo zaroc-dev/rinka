@@ -130,7 +130,7 @@ something costs more than a few minutes.
 ## Wayland host
 
 - **Requests can arrive before outputs exist.** Do the initial registry
-  roundtrips before opening the control socket.
+  roundtrips before accepting control requests.
 - **Animation must start after the first configure.** A scene learns it
   animates on its first draw, which happens after `assign`. `draw()` calls
   `ensure_video_timer()` itself. After drawing, schedule the next frame or the
@@ -139,6 +139,14 @@ something costs more than a few minutes.
   `Wallpaper` matters; `Drop` clears the target first.
 - **Background layer order.** A newer surface stacks above older ones in the
   same layer; shells like yuki keep their own wallpaper surfaces there.
+- **Shell color stills must wait for video frames.** Video and scene video
+  textures start as black placeholders, and a player paused before its first
+  frame never delivered one. Export after the frames arrive, and let a paused
+  player take its first frame as the still.
+- **Shells stop drawing under Rinka.** A shell's own background windows
+  (Yuki's Canvas extractor, its wallpaper surfaces) can sit below Rinka's
+  newer surface and never paint. Consumers must not depend on paint
+  callbacks there; see the Yuki side in `docs/shell-colors.md`.
 - **FIFO stalls on hidden surfaces.** niri sends no frame callbacks to the
   overview backdrop surface while the overview is closed, and a second FIFO
   present there blocked the event loop for 774 ms. Backdrop surfaces present

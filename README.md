@@ -100,6 +100,20 @@ layer-rule {
 }
 ```
 
+### Yuki wallpaper colors
+
+With [Yuki](https://github.com/zaroc-dev/yuki)'s Rinka integration, the shell
+and its app color templates follow the wallpaper assigned in Rinka. In
+Yuki, select the **Wallpaper** color source and choose the output under
+**Colors from**. Yuki keeps its existing Material You schemes and light/dark
+mode, and yields its wallpaper surfaces on Rinka's assigned outputs.
+
+The Linux host exports small rendered stills when assignments, projects or
+output sizes change. Images, video and scenes use the engine's rendered
+colors, including project adjustments. Animation does not continuously
+regenerate the theme. The file contract and measured checks are in
+[Shell colors](docs/shell-colors.md).
+
 ### Notes
 
 - The editor's preview needs hardware WebGPU. On NixOS, Chromium's GPU sandbox

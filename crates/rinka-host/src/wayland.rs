@@ -74,6 +74,13 @@ use crate::video::{OwnedFrame, Player, SceneVideos};
 /// treated as hidden and its clock pauses.
 const HIDDEN_AFTER: Duration = Duration::from_millis(500);
 
+/// Seconds new or edited animated content plays, from its first decoded
+/// video frames, before the shell's color still is taken: its first frame may
+/// still be fading in from black or have no particles yet. Measured in
+/// content time, so a hidden video's paused clock is not sampled mid-fade.
+/// Also coalesces a burst of edits into one still.
+const COLOR_SETTLE: f64 = 1.0;
+
 /// Fractional scale denominator defined by wp-fractional-scale-v1.
 const SCALE_DENOMINATOR: u32 = 120;
 
@@ -136,6 +143,10 @@ pub fn run(endpoint: PathBuf, saved: Saved) -> anyhow::Result<()> {
 
     // Before restored assignments open their videos.
     crate::video::set_decoder(saved.settings.video_decoder);
+    let listener = control::bind(&endpoint)?;
+    let shell_colors = crate::shell_colors::ShellColors::new(&endpoint)
+        .inspect_err(|e| log::warn!("shell color export: {e:#}"))
+        .ok();
     let mut host = Host {
         registry: RegistryState::new(&globals),
         output_state: OutputState::new(&globals, &qh),
@@ -149,6 +160,7 @@ pub fn run(endpoint: PathBuf, saved: Saved) -> anyhow::Result<()> {
         ),
         gpu: None,
         images: ImageCache::default(),
+        shell_colors,
         loop_handle: event_loop.handle(),
         video_timer: false,
         outputs: Vec::new(),
@@ -166,7 +178,6 @@ pub fn run(endpoint: PathBuf, saved: Saved) -> anyhow::Result<()> {
         .insert(event_loop.handle())
         .map_err(|e| anyhow::anyhow!("inserting Wayland source: {e}"))?;
 
-    let listener = control::bind(&endpoint)?;
     log::info!("control socket: {}", endpoint.display());
     control::serve(listener, move |cmd| tx.send(cmd).is_ok());
 
@@ -231,6 +242,7 @@ struct Host {
     instance: wgpu::Instance,
     gpu: Option<Gpu>,
     images: ImageCache,
+    shell_colors: Option<crate::shell_colors::ShellColors>,
     loop_handle: LoopHandle<'static, Host>,
     /// Whether the video loop timer is registered.
     video_timer: bool,
@@ -279,6 +291,12 @@ struct Wallpaper {
     hidden: bool,
     /// The project changed since the target was last updated.
     dirty: bool,
+    /// Buffer size represented by the shell's still; reset on project edits.
+    color_sample: Option<(u32, u32)>,
+    /// Content time from which animated content is sampled: `COLOR_SETTLE`
+    /// after it first showed decoded frames. `None` until then; reset on
+    /// edits.
+    color_after: Option<f64>,
     backdrop: Option<Backdrop>,
     // Field order matters: the wgpu surface must drop before the wl_surface
     // owned by `layer`.
@@ -368,14 +386,51 @@ impl Wallpaper {
             (w * self.scale_int, h * self.scale_int)
         }
     }
+
+    /// Whether every video shows decoded frames rather than its black
+    /// placeholder. A failed decoder cannot hold this up.
+    fn shows_frames(&self) -> bool {
+        (self.video.is_none() || self.video_texture.is_some() || self.player.is_none())
+            && self.scene_videos.ready()
+    }
+
+    /// Playback time of the content: the video's timeline, which pauses
+    /// while the surface looks hidden, or the scene clock.
+    fn content_time(&self, now: Instant) -> f64 {
+        match &self.player {
+            Some(player) => player.position(now).unwrap_or(0.0),
+            None => self.scene_clock.time(now),
+        }
+    }
+
+    /// Whether the shell's color still is out of date and can be taken now:
+    /// videos show frames, and animated content has settled unless `frozen`
+    /// by a pause.
+    fn color_sample_due(&self, now: Instant, frozen: bool) -> bool {
+        let animated = self.player.is_some() || self.next_frame.is_some();
+        self.target.is_some()
+            && self.color_sample != Some(self.buffer_size())
+            && self.shows_frames()
+            && (frozen
+                || !animated
+                || self
+                    .color_after
+                    .is_some_and(|t| self.content_time(now) >= t))
+    }
+}
+
+/// The output's connector name, or its protocol id before the name is known.
+/// Separate from `Host` so callers holding a wallpaper can still name it.
+fn output_name(state: &OutputState, wl: &wl_output::WlOutput) -> String {
+    state
+        .info(wl)
+        .and_then(|i| i.name)
+        .unwrap_or_else(|| format!("wl_output@{}", wl.id().protocol_id()))
 }
 
 impl Host {
     fn output_name(&self, wl: &wl_output::WlOutput) -> String {
-        self.output_state
-            .info(wl)
-            .and_then(|i| i.name)
-            .unwrap_or_else(|| format!("wl_output@{}", wl.id().protocol_id()))
+        output_name(&self.output_state, wl)
     }
 
     fn slot_index(&self, name: &str) -> Option<usize> {
@@ -505,6 +560,8 @@ impl Host {
             frame_pending: None,
             hidden: false,
             dirty: false,
+            color_sample: None,
+            color_after: None,
             backdrop,
             target: None,
             viewport,
@@ -520,7 +577,11 @@ impl Host {
     /// removing its wallpaper surface.
     fn apply_assignment(&mut self, index: usize, prepared: Option<Prepared>) {
         match prepared {
-            None => self.outputs[index].wallpaper = None,
+            None => {
+                let name = self.output_name(&self.outputs[index].wl);
+                self.remove_color_sample(&name);
+                self.outputs[index].wallpaper = None;
+            }
             Some(mut prepared) => {
                 let video = prepared.video.clone();
                 let speed = prepared.project.speed;
@@ -554,6 +615,8 @@ impl Host {
                     w.image = prepared.image;
                     w.scene = prepared.scene;
                     w.dirty = true;
+                    w.color_sample = None;
+                    w.color_after = None;
                 } else {
                     let wl = self.outputs[index].wl.clone();
                     self.outputs[index].wallpaper = Some(self.create_wallpaper(&wl, prepared));
@@ -734,9 +797,15 @@ impl Host {
                 t.target.render(renderer, &gpu.queue, encoder, &frame);
             },
         );
+        let mut sample = false;
         match outcome {
             FrameOutcome::Presented => {
                 log::debug!("presented {width}x{height} in {:?}", draw_start.elapsed());
+                let now = Instant::now();
+                if w.color_after.is_none() && w.shows_frames() {
+                    w.color_after = Some(w.content_time(now) + COLOR_SETTLE);
+                }
+                sample = w.color_sample_due(now, self.paused);
             }
             FrameOutcome::Skipped => log::debug!("frame skipped"),
             FrameOutcome::Lost => {
@@ -757,6 +826,9 @@ impl Host {
             // The wallpaper's time: particle systems replay from the start
             // when drawn at an earlier time than before.
             self.draw_backdrop(index, time);
+        }
+        if sample {
+            self.sample_colors(index, time);
         }
     }
 
@@ -950,6 +1022,7 @@ impl Host {
     /// Advances every video. Returns when to run again, or `None` when no
     /// video needs the timer.
     fn video_tick(&mut self, now: Instant) -> Option<Duration> {
+        self.sample_undrawn_colors(now);
         let mut next: Option<Duration> = None;
         let mut any = false;
         let mut sound_changed = false;
@@ -966,8 +1039,16 @@ impl Host {
                 .is_some_and(|t| now.duration_since(t) > HIDDEN_AFTER);
             if let Some(due) = w.next_frame {
                 // A paused scene keeps its last frame; `resume` restarts the
-                // timer.
+                // timer. One assigned while paused still waits for its videos'
+                // first frames, for the screen and the shell color still.
                 if paused {
+                    if !w.scene_videos.ready() {
+                        any = true;
+                        w.scene_videos.poll(now);
+                        if w.scene_videos.ready() {
+                            self.draw(index);
+                        }
+                    }
                     continue;
                 }
                 if looks_hidden && !w.hidden {
@@ -1029,6 +1110,64 @@ impl Host {
                 .as_ref()
                 .is_some_and(|w| w.layer.wl_surface() == surface)
         })
+    }
+
+    /// Exports the shell color still of output `index`, drawn offscreen at
+    /// scene time `time`. Callers check `Wallpaper::color_sample_due`.
+    fn sample_colors(&mut self, index: usize, time: f64) {
+        let slot = &mut self.outputs[index];
+        let (Some(export), Some(gpu), Some(w)) =
+            (&mut self.shell_colors, &mut self.gpu, &mut slot.wallpaper)
+        else {
+            return;
+        };
+        let output_size = w.buffer_size();
+        let Some(t) = &mut w.target else {
+            return;
+        };
+        let renderer = gpu.renderer_index(t.setup.render_format);
+        let renderer = &gpu.renderers[renderer].1;
+        let size = backdrop::still_size(output_size);
+        let pixels = rinka_engine::capture::Capture {
+            size,
+            output_size,
+            time,
+            // The surface may store sRGB; the renderer targets its sRGB view
+            // either way.
+            format: t.setup.config.format.remove_srgb_suffix(),
+        }
+        .read(&gpu.device, &gpu.queue, renderer, &mut t.target);
+        let name = output_name(&self.output_state, &slot.wl);
+        if let Err(e) = export.set(&name, size, &pixels) {
+            log::warn!("shell color export on {name}: {e:#}");
+        }
+        // An I/O failure must not retry on every animation frame.
+        w.color_sample = Some(output_size);
+    }
+
+    /// Takes the stills draws will not take soon: of paused content, which
+    /// no longer draws, and of surfaces that look hidden.
+    fn sample_undrawn_colors(&mut self, now: Instant) {
+        for index in 0..self.outputs.len() {
+            let Some(w) = &self.outputs[index].wallpaper else {
+                continue;
+            };
+            let hidden = w
+                .frame_pending
+                .is_some_and(|t| now.duration_since(t) > HIDDEN_AFTER);
+            if (self.paused || hidden) && w.color_sample_due(now, self.paused) {
+                let time = w.scene_clock.time(now);
+                self.sample_colors(index, time);
+            }
+        }
+    }
+
+    fn remove_color_sample(&mut self, name: &str) {
+        if let Some(export) = &mut self.shell_colors
+            && let Err(e) = export.remove(name)
+        {
+            log::warn!("removing shell color export on {name}: {e:#}");
+        }
     }
 
     fn find_backdrop(&self, surface: &wl_surface::WlSurface) -> Option<usize> {
@@ -1099,6 +1238,8 @@ impl Host {
                     w.scene_clock.pause(now);
                     w.scene_videos.pause(now);
                 }
+                // Paused content no longer draws; its frame is the still.
+                self.sample_undrawn_colors(now);
                 self.sync_sound();
                 Ok(Value::Null)
             }
@@ -1412,7 +1553,9 @@ impl OutputHandler for Host {
     fn update_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
 
     fn output_destroyed(&mut self, _: &Connection, _: &QueueHandle<Self>, wl: wl_output::WlOutput) {
-        log::info!("output removed: {}", self.output_name(&wl));
+        let name = self.output_name(&wl);
+        log::info!("output removed: {name}");
+        self.remove_color_sample(&name);
         self.outputs.retain(|s| s.wl != wl);
     }
 }
@@ -1430,10 +1573,9 @@ impl LayerShellHandler for Host {
             return;
         }
         if let Some(index) = self.find_surface(layer.wl_surface()) {
-            log::info!(
-                "compositor closed wallpaper surface on {}",
-                self.output_name(&self.outputs[index].wl)
-            );
+            let name = self.output_name(&self.outputs[index].wl);
+            log::info!("compositor closed wallpaper surface on {name}");
+            self.remove_color_sample(&name);
             self.outputs[index].wallpaper = None;
         }
     }
