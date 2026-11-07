@@ -18,7 +18,9 @@ Stills come from the active engine target, with its output placement, project
 adjustments and video matrix/range. They refresh after assignment, project
 reload and buffer-size changes, at the wallpaper's current scene time. Video
 and scene video textures wait for decoded frames, rather than capturing their
-black placeholders. Seeking and ordinary animation do not regenerate colors.
+black placeholders. Content assigned while playback is paused shows and
+exports its first decoded video frame; until then the output keeps its
+previous still. Seeking and ordinary animation do not regenerate colors.
 There is one bounded readback per change, with no added render timer.
 
 Yuki yields its wallpaper and overview surfaces on Rinka's exported outputs.
@@ -47,6 +49,8 @@ overwrite the desktop host's export.
   output. Stills are at most 256 lines high, as for the overview backdrop.
 - Output names are JSON keys, never file names. Removing or replacing an
   entry deletes its old image; normal shutdown removes the export files.
+  The host only deletes its own PNGs there and removes the directory only
+  when it is empty, since its path follows a user-chosen socket.
 - A restarting host clears stale stills after binding its control endpoint.
   Yuki uses entries only while the v1 control connection is alive and its
   `hello` PID matches the manifest. A crashed host's leftover files cannot

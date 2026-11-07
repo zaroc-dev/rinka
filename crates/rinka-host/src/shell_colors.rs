@@ -24,11 +24,15 @@ impl ShellColors {
     pub fn new(endpoint: &Path) -> anyhow::Result<Self> {
         let directory = endpoint.with_extension("wallpapers");
         // A previous host may have crashed. The caller has bound the socket
-        // already, so no other live host owns these files.
-        if directory.exists() {
-            std::fs::remove_dir_all(&directory)?;
-        }
+        // already, so no other live host owns these files. The directory
+        // follows a user-chosen socket path: only stills are removed.
         std::fs::create_dir_all(&directory)?;
+        for entry in std::fs::read_dir(&directory)? {
+            let path = entry?.path();
+            if path.extension().is_some_and(|e| e == "png") {
+                std::fs::remove_file(path)?;
+            }
+        }
         let directory = std::fs::canonicalize(directory)?;
         let export = Self {
             manifest: endpoint.with_extension("wallpapers.json"),
@@ -98,7 +102,11 @@ impl ShellColors {
 impl Drop for ShellColors {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.manifest);
-        let _ = std::fs::remove_dir_all(&self.directory);
+        for output in self.outputs.values() {
+            let _ = std::fs::remove_file(&output.image);
+        }
+        // Left in place if anything else was put there.
+        let _ = std::fs::remove_dir(&self.directory);
     }
 }
 
@@ -142,6 +150,28 @@ mod tests {
         }
         assert!(!manifest.exists());
         assert!(!endpoint.with_extension("wallpapers").exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn restart_clears_stale_stills_but_nothing_else() {
+        let dir = std::env::temp_dir().join(format!("rinka-shell-stale-{}", std::process::id()));
+        let endpoint = dir.join("host.sock");
+        let stills = endpoint.with_extension("wallpapers");
+        std::fs::create_dir_all(&stills).unwrap();
+        std::fs::write(stills.join("1-1.png"), b"crashed host").unwrap();
+        std::fs::write(stills.join("notes.txt"), b"not ours").unwrap();
+        {
+            let mut export = ShellColors::new(&endpoint).unwrap();
+            assert!(!stills.join("1-1.png").exists());
+            export.set("DP-2", (1, 1), &[30, 111, 115, 255]).unwrap();
+        }
+        // Our stills are gone; the foreign file and so the directory remain.
+        let left: Vec<_> = std::fs::read_dir(&stills)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(left, ["notes.txt"]);
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

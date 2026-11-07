@@ -377,12 +377,18 @@ impl Wallpaper {
     }
 }
 
+/// The output's connector name, or its protocol id before the name is known.
+/// Separate from `Host` so callers holding a wallpaper can still name it.
+fn output_name(state: &OutputState, wl: &wl_output::WlOutput) -> String {
+    state
+        .info(wl)
+        .and_then(|i| i.name)
+        .unwrap_or_else(|| format!("wl_output@{}", wl.id().protocol_id()))
+}
+
 impl Host {
     fn output_name(&self, wl: &wl_output::WlOutput) -> String {
-        self.output_state
-            .info(wl)
-            .and_then(|i| i.name)
-            .unwrap_or_else(|| format!("wl_output@{}", wl.id().protocol_id()))
+        output_name(&self.output_state, wl)
     }
 
     fn slot_index(&self, name: &str) -> Option<usize> {
@@ -618,7 +624,8 @@ impl Host {
     }
 
     fn draw(&mut self, index: usize) {
-        let name = self.output_name(&self.outputs[index].wl);
+        // Named only when a shell color still is exported.
+        let wl = self.outputs[index].wl.clone();
         let Some(w) = self.outputs[index].wallpaper.as_mut() else {
             return;
         };
@@ -761,9 +768,12 @@ impl Host {
                         size,
                         output_size: (width, height),
                         time,
-                        format: t.setup.config.format,
+                        // The surface may store sRGB; the renderer targets
+                        // its sRGB view either way.
+                        format: t.setup.config.format.remove_srgb_suffix(),
                     }
                     .read(&gpu.device, &gpu.queue, renderer, &mut t.target);
+                    let name = output_name(&self.output_state, &wl);
                     if let Err(e) = export.set(&name, size, &pixels) {
                         log::warn!("shell color export on {name}: {e:#}");
                     }
@@ -999,8 +1009,16 @@ impl Host {
                 .is_some_and(|t| now.duration_since(t) > HIDDEN_AFTER);
             if let Some(due) = w.next_frame {
                 // A paused scene keeps its last frame; `resume` restarts the
-                // timer.
+                // timer. One assigned while paused still waits for its videos'
+                // first frames, for the screen and the shell color still.
                 if paused {
+                    if !w.scene_videos.ready() {
+                        any = true;
+                        w.scene_videos.poll(now);
+                        if w.scene_videos.ready() {
+                            self.draw(index);
+                        }
+                    }
                     continue;
                 }
                 if looks_hidden && !w.hidden {
@@ -1473,11 +1491,8 @@ impl LayerShellHandler for Host {
             return;
         }
         if let Some(index) = self.find_surface(layer.wl_surface()) {
-            log::info!(
-                "compositor closed wallpaper surface on {}",
-                self.output_name(&self.outputs[index].wl)
-            );
             let name = self.output_name(&self.outputs[index].wl);
+            log::info!("compositor closed wallpaper surface on {name}");
             self.remove_color_sample(&name);
             self.outputs[index].wallpaper = None;
         }

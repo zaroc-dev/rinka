@@ -929,6 +929,9 @@ impl Player {
             self.paused_at = self.position(now);
             if self.paused_at.is_none() {
                 self.paused_at = Some(0.0);
+                // Nothing shown yet: take the first frame as the still, as a
+                // paused seek does, instead of staying black.
+                self.seeking = true;
             }
         }
     }
@@ -1250,6 +1253,22 @@ mod tests {
         assert!(p.poll(now + Duration::from_secs(10)).0.is_none());
         p.resume(now + Duration::from_secs(10));
         assert!((p.position_in_video(now + Duration::from_secs(11)).unwrap() - 1.32).abs() < 1e-9);
+    }
+
+    #[test]
+    fn paused_before_the_first_frame_shows_it_and_stays_paused() {
+        let (mut p, tx, _commands) = player();
+        let now = Instant::now();
+        p.pause(now);
+        tx.send(frame(0.0, 0.0, 0)).unwrap();
+        tx.send(frame(0.04, 0.04, 0)).unwrap();
+        assert_eq!(p.poll(now).0.unwrap().file_pts, 0.0);
+        assert!(p.is_paused());
+        assert!(p.poll(now + Duration::from_secs(10)).0.is_none());
+        assert_eq!(
+            p.position_in_video(now + Duration::from_secs(10)),
+            Some(0.0)
+        );
     }
 
     #[test]
