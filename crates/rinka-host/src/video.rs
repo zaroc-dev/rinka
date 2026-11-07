@@ -849,7 +849,9 @@ impl Player {
         self.stopped
     }
 
-    fn position(&self, now: Instant) -> Option<f64> {
+    /// Timeline position, continuing across loops and stopping while
+    /// paused; `None` before the first frame.
+    pub fn position(&self, now: Instant) -> Option<f64> {
         if let Some(p) = self.paused_at {
             return Some(p);
         }

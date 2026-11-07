@@ -18,9 +18,15 @@ Stills come from the active engine target, with its output placement, project
 adjustments and video matrix/range. They refresh after assignment, project
 reload and buffer-size changes, at the wallpaper's current scene time. Video
 and scene video textures wait for decoded frames, rather than capturing their
-black placeholders. Content assigned while playback is paused shows and
-exports its first decoded video frame; until then the output keeps its
-previous still. Seeking and ordinary animation do not regenerate colors.
+black placeholders. Animated content then plays for one second of content time
+before it is sampled, so a fade-in from black or a particle system that has
+not emitted yet does not set the palette; this also coalesces a burst of
+edits into one still. A video that looks hidden pauses its clock and is
+sampled once it plays again; a hidden scene, whose clock keeps running, is
+sampled offscreen. Static content is sampled at once. Content shown while
+playback is paused is sampled as shown, including the first decoded frame of
+a video assigned while paused; until then the output keeps its previous
+still. Seeking and ordinary animation do not regenerate colors.
 There is one bounded readback per change, with no added render timer.
 
 Yuki yields its wallpaper and overview surfaces on Rinka's exported outputs.
@@ -87,6 +93,14 @@ and lifecycle metadata only. Windows does not export these stills.
 - Export modification time remains unchanged during static playback and
   ordinary video animation. Crash leaves files but immediately invalidates
   Yuki's live entries; restart reconnects; graceful shutdown removes files.
+- Settling (2026-11-08, headless Sway 1.12 so frame callbacks are not
+  throttled): a video fading in from black to `#1e6f73` over 0.6 s exported
+  one still 1.11 s after assignment, mean (28,109,113); sampling its first
+  frame gave black. On a nested Niri whose window sat on a hidden workspace,
+  the same video paused as hidden mid-fade, which is why settling counts
+  content time. Static color was exported at once and exactly; a video
+  assigned while paused exported its frozen first frame after 0.10 s. The
+  hidden-scene offscreen path is not covered by a measurement.
 
 Checks also cover workspace Clippy, WASM Clippy, the Windows host cross-check,
 editor typecheck/build and `nix build .#rinka`.

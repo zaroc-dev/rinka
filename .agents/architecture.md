@@ -196,7 +196,9 @@ holds `{version: 1, assignments: {output: projectId}}`; the library is
   `sceneFps` at start.
 - Linux shell colors (`shell_colors.rs`): after a successful present, export
   a small engine-rendered still on assignment, reload or buffer-size change.
-  Wait for video frames, including scene textures. `<socket stem>.wallpapers.json`
+  Wait for video frames, including scene textures, then one second of content
+  time for animated content (`COLOR_SETTLE`); paused content is sampled as
+  shown, hidden content offscreen from the video timer. `<socket stem>.wallpapers.json`
   atomically maps connected outputs to unique PNG paths, with a version and
   host PID; remove entries on unassign/disconnect and files on shutdown.
   Yuki consumes these through its existing Material seed worker and uses a
