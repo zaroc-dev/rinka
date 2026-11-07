@@ -130,7 +130,7 @@ something costs more than a few minutes.
 ## Wayland host
 
 - **Requests can arrive before outputs exist.** Do the initial registry
-  roundtrips before opening the control socket.
+  roundtrips before accepting control requests.
 - **Animation must start after the first configure.** A scene learns it
   animates on its first draw, which happens after `assign`. `draw()` calls
   `ensure_video_timer()` itself. After drawing, schedule the next frame or the
@@ -139,6 +139,11 @@ something costs more than a few minutes.
   `Wallpaper` matters; `Drop` clears the target first.
 - **Background layer order.** A newer surface stacks above older ones in the
   same layer; shells like yuki keep their own wallpaper surfaces there.
+- **Shell color extraction cannot depend on a background paint callback.**
+  Rinka can cover Yuki's tiny Canvas window, preventing initialization or
+  painting. Yuki uses an input-transparent overlay only while extracting and
+  reads pixels on image load. Its own wallpaper and backdrop surfaces yield
+  only outputs present in Rinka's live, PID-matched still manifest.
 - **FIFO stalls on hidden surfaces.** niri sends no frame callbacks to the
   overview backdrop surface while the overview is closed, and a second FIFO
   present there blocked the event loop for 774 ms. Backdrop surfaces present

@@ -1016,6 +1016,15 @@ impl SceneVideos {
         self.videos.is_empty()
     }
 
+    /// A color sample must wait for video textures instead of sampling the
+    /// black placeholders. A failed decoder cannot hold it up forever.
+    #[cfg(target_os = "linux")]
+    pub fn ready(&self) -> bool {
+        self.videos
+            .iter()
+            .all(|v| v.frame.is_some() || v.player.stopped())
+    }
+
     /// Each video texture's path and stream, for status requests.
     pub fn status(&self) -> Vec<serde_json::Value> {
         self.videos

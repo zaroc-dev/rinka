@@ -81,6 +81,12 @@ Values: 162 scripted, 20 animated, 161 user-bound (all use static values now).
 Playback settings (2026-11-05, `docs/playback-settings.md`): per-project
 speed and color adjustments, host-wide scene frame rate 15/30.
 
+Yuki wallpaper colors (2026-11-07, `docs/shell-colors.md`): Linux host exports
+change-driven engine stills for the shell's existing Material You pipeline.
+Solid/video/gamma-scene seeds, edit/reassignment, fallback, crash/restart and
+shutdown verified on a nested Niri; physical multi-output hotplug and Hyprland
+remain unverified.
+
 ## Next, in order
 
 1. **Wallpaper Engine user properties** (colors, sliders, toggles, combos,

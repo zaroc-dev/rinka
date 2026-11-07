@@ -149,7 +149,8 @@ holds `{version: 1, assignments: {output: projectId}}`; the library is
 ## Host (`rinka-host serve`)
 
 - calloop event loop with the Wayland source, a control channel and a timer.
-- Initial roundtrips happen before the socket opens, so requests see outputs.
+- Initial roundtrips finish before control requests are accepted, so requests
+  see outputs.
 - One background layer surface per assigned output (anchor all edges,
   exclusive zone −1, no keyboard, empty input region), fractional scale via
   `wp_fractional_scale_v1` + viewporter, integer buffer scale otherwise.
@@ -193,6 +194,14 @@ holds `{version: 1, assignments: {output: projectId}}`; the library is
   gotchas).
 - `--restore [DIR]` reads the editor's `config.json` assignments and
   `sceneFps` at start.
+- Linux shell colors (`shell_colors.rs`): after a successful present, export
+  a small engine-rendered still on assignment, reload or buffer-size change.
+  Wait for video frames, including scene textures. `<socket stem>.wallpapers.json`
+  atomically maps connected outputs to unique PNG paths, with a version and
+  host PID; remove entries on unassign/disconnect and files on shutdown.
+  Yuki consumes these through its existing Material seed worker and uses a
+  control connection to reject stale exports. No frames cross IPC and no
+  palette extraction runs on the playback loop. See `docs/shell-colors.md`.
 
 ## Control protocol (v1)
 

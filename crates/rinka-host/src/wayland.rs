@@ -136,6 +136,10 @@ pub fn run(endpoint: PathBuf, saved: Saved) -> anyhow::Result<()> {
 
     // Before restored assignments open their videos.
     crate::video::set_decoder(saved.settings.video_decoder);
+    let listener = control::bind(&endpoint)?;
+    let shell_colors = crate::shell_colors::ShellColors::new(&endpoint)
+        .inspect_err(|e| log::warn!("shell color export: {e:#}"))
+        .ok();
     let mut host = Host {
         registry: RegistryState::new(&globals),
         output_state: OutputState::new(&globals, &qh),
@@ -149,6 +153,7 @@ pub fn run(endpoint: PathBuf, saved: Saved) -> anyhow::Result<()> {
         ),
         gpu: None,
         images: ImageCache::default(),
+        shell_colors,
         loop_handle: event_loop.handle(),
         video_timer: false,
         outputs: Vec::new(),
@@ -166,7 +171,6 @@ pub fn run(endpoint: PathBuf, saved: Saved) -> anyhow::Result<()> {
         .insert(event_loop.handle())
         .map_err(|e| anyhow::anyhow!("inserting Wayland source: {e}"))?;
 
-    let listener = control::bind(&endpoint)?;
     log::info!("control socket: {}", endpoint.display());
     control::serve(listener, move |cmd| tx.send(cmd).is_ok());
 
@@ -231,6 +235,7 @@ struct Host {
     instance: wgpu::Instance,
     gpu: Option<Gpu>,
     images: ImageCache,
+    shell_colors: Option<crate::shell_colors::ShellColors>,
     loop_handle: LoopHandle<'static, Host>,
     /// Whether the video loop timer is registered.
     video_timer: bool,
@@ -279,6 +284,8 @@ struct Wallpaper {
     hidden: bool,
     /// The project changed since the target was last updated.
     dirty: bool,
+    /// Buffer size represented by the shell's still; reset on project edits.
+    color_sample: Option<(u32, u32)>,
     backdrop: Option<Backdrop>,
     // Field order matters: the wgpu surface must drop before the wl_surface
     // owned by `layer`.
@@ -505,6 +512,7 @@ impl Host {
             frame_pending: None,
             hidden: false,
             dirty: false,
+            color_sample: None,
             backdrop,
             target: None,
             viewport,
@@ -520,7 +528,11 @@ impl Host {
     /// removing its wallpaper surface.
     fn apply_assignment(&mut self, index: usize, prepared: Option<Prepared>) {
         match prepared {
-            None => self.outputs[index].wallpaper = None,
+            None => {
+                let name = self.output_name(&self.outputs[index].wl);
+                self.remove_color_sample(&name);
+                self.outputs[index].wallpaper = None;
+            }
             Some(mut prepared) => {
                 let video = prepared.video.clone();
                 let speed = prepared.project.speed;
@@ -554,6 +566,7 @@ impl Host {
                     w.image = prepared.image;
                     w.scene = prepared.scene;
                     w.dirty = true;
+                    w.color_sample = None;
                 } else {
                     let wl = self.outputs[index].wl.clone();
                     self.outputs[index].wallpaper = Some(self.create_wallpaper(&wl, prepared));
@@ -605,6 +618,7 @@ impl Host {
     }
 
     fn draw(&mut self, index: usize) {
+        let name = self.output_name(&self.outputs[index].wl);
         let Some(w) = self.outputs[index].wallpaper.as_mut() else {
             return;
         };
@@ -737,6 +751,25 @@ impl Host {
         match outcome {
             FrameOutcome::Presented => {
                 log::debug!("presented {width}x{height} in {:?}", draw_start.elapsed());
+                if w.color_sample != Some((width, height))
+                    && (w.video.is_none() || w.video_texture.is_some() || w.player.is_none())
+                    && w.scene_videos.ready()
+                    && let Some(export) = &mut self.shell_colors
+                {
+                    let size = rinka_engine::backdrop::still_size((width, height));
+                    let pixels = rinka_engine::capture::Capture {
+                        size,
+                        output_size: (width, height),
+                        time,
+                        format: t.setup.config.format,
+                    }
+                    .read(&gpu.device, &gpu.queue, renderer, &mut t.target);
+                    if let Err(e) = export.set(&name, size, &pixels) {
+                        log::warn!("shell color export on {name}: {e:#}");
+                    }
+                    // An I/O failure must not retry on every animation frame.
+                    w.color_sample = Some((width, height));
+                }
             }
             FrameOutcome::Skipped => log::debug!("frame skipped"),
             FrameOutcome::Lost => {
@@ -1029,6 +1062,14 @@ impl Host {
                 .as_ref()
                 .is_some_and(|w| w.layer.wl_surface() == surface)
         })
+    }
+
+    fn remove_color_sample(&mut self, name: &str) {
+        if let Some(export) = &mut self.shell_colors
+            && let Err(e) = export.remove(name)
+        {
+            log::warn!("removing shell color export on {name}: {e:#}");
+        }
     }
 
     fn find_backdrop(&self, surface: &wl_surface::WlSurface) -> Option<usize> {
@@ -1412,7 +1453,9 @@ impl OutputHandler for Host {
     fn update_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
 
     fn output_destroyed(&mut self, _: &Connection, _: &QueueHandle<Self>, wl: wl_output::WlOutput) {
-        log::info!("output removed: {}", self.output_name(&wl));
+        let name = self.output_name(&wl);
+        log::info!("output removed: {name}");
+        self.remove_color_sample(&name);
         self.outputs.retain(|s| s.wl != wl);
     }
 }
@@ -1434,6 +1477,8 @@ impl LayerShellHandler for Host {
                 "compositor closed wallpaper surface on {}",
                 self.output_name(&self.outputs[index].wl)
             );
+            let name = self.output_name(&self.outputs[index].wl);
+            self.remove_color_sample(&name);
             self.outputs[index].wallpaper = None;
         }
     }
