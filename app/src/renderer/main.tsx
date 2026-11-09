@@ -8,6 +8,7 @@ import { onPreviewStatus, previewStatus, setPreviewFps, setPreviewSound, startPr
 import { api, errorMessage, outputPixels, readPref, resolution, useDismiss, writePref } from "./util";
 import { Wallpaper } from "./wallpaper";
 import { ImportView } from "./import";
+import { type Plasma, PlasmaNotice, PlasmaSection, usePlasmaDesktop } from "./plasma";
 
 declare global {
   interface Window {
@@ -43,6 +44,7 @@ function App() {
   const [view, setView] = useState<ViewMode>(readPref("view", VIEW_MODES, "grid"));
   const [sort, setSort] = useState<Sort>(readPref("sort", SORTS, "recent"));
   const [filter, setFilter] = useState<Filter>("all");
+  const plasma = usePlasmaDesktop(host);
   const toastTimer = useRef<number | undefined>(undefined);
   const dragDepth = useRef(0);
 
@@ -266,11 +268,12 @@ function App() {
             }}
             onOpen={setOpenId}
             onAddImages={() => void addFiles(undefined, "image")}
+            notice={<PlasmaNotice plasma={plasma} outputs={outputs} />}
           />
         )}
       </main>
 
-      {settingsOpen && <Settings host={host} outputs={outputs} onClose={() => setSettingsOpen(false)} />}
+      {settingsOpen && <Settings host={host} outputs={outputs} plasma={plasma} onClose={() => setSettingsOpen(false)} />}
       {dropping && (
         <div class="drop-overlay">
           <p>Drop images or videos to add them to your library</p>
@@ -285,7 +288,7 @@ function App() {
   );
 }
 
-function Settings({ host, outputs, onClose }: { host: HostState; outputs: OutputInfo[]; onClose(): void }) {
+function Settings({ host, outputs, plasma, onClose }: { host: HostState; outputs: OutputInfo[]; plasma: Plasma | null; onClose(): void }) {
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [preview, setPreview] = useState(previewStatus());
@@ -354,6 +357,8 @@ function Settings({ host, outputs, onClose }: { host: HostState; outputs: Output
             </button>
           )}
         </section>
+
+        <PlasmaSection plasma={plasma} />
 
         <section class="sheet-section">
           <h3>Displays</h3>

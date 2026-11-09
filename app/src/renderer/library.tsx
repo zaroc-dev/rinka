@@ -1,3 +1,4 @@
+import type { ComponentChildren } from "preact";
 import { useMemo } from "preact/hooks";
 import type { LibraryEntry, OutputInfo } from "../shared/api";
 import { CompactIcon, GridIcon, ListIcon } from "./icons";
@@ -21,6 +22,8 @@ interface Props {
   onSort(s: Sort): void;
   onOpen(id: string): void;
   onAddImages(): void;
+  /** Shown above the library, e.g. when the desktop hides the wallpapers. */
+  notice?: ComponentChildren;
 }
 
 export function Library(props: Props) {
@@ -60,6 +63,7 @@ export function Library(props: Props) {
 
   return (
     <section class="library" aria-label="Library">
+      {props.notice}
       <div class="library-head">
         <div class="library-title">
           <h1>Library</h1>

@@ -95,6 +95,11 @@
             buildInputs = [ pkgs.ffmpeg ] ++ runtimeLibs pkgs;
             # The tests render on a GPU, which the build sandbox lacks.
             doCheck = false;
+            # KDE Plasma's "Rinka" wallpaper type (see src/plasma.rs).
+            postInstall = ''
+              mkdir -p $out/share/plasma/wallpapers
+              cp -r crates/rinka-host/plasma/wallpaper $out/share/plasma/wallpapers/dev.rinka.wallpaper
+            '';
             postFixup = ''
               wrapProgram $out/bin/rinka-host \
                 --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath (runtimeLibs pkgs)}
@@ -183,6 +188,8 @@
                 --add-flags $out/share/rinka/app \
                 --set-default RINKA_HOST_BIN ${rinka-host}/bin/rinka-host
               ln -s ${rinka-host}/bin/rinka-host $out/bin/rinka-host
+              mkdir -p $out/share/plasma
+              ln -s ${rinka-host}/share/plasma/wallpapers $out/share/plasma/wallpapers
               install -Dm644 ${./assets/rinka.svg} $out/share/icons/hicolor/scalable/apps/rinka.svg
               runHook postInstall
             '';

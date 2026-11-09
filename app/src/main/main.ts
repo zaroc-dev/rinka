@@ -7,7 +7,7 @@ import { Readable } from "node:stream";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { SCENE_FPS_CHOICES } from "../shared/api";
-import type { AppSettings, HostState, SceneFps, VideoDecoder, VideoEncoder, VideoFiles, OptimizeOptions, OptimizeResult, ImportResult, LibraryEntry, OutputInfo, PreviewReport, Project } from "../shared/api";
+import type { AppSettings, HostState, SceneFps, VideoDecoder, VideoEncoder, VideoFiles, OptimizeOptions, OptimizeResult, ImportResult, LibraryEntry, OutputInfo, PlasmaDesktopState, PreviewReport, Project } from "../shared/api";
 import { connectOrSpawn, defaultSocketPath, findHostBinary, type HostConnection } from "./host";
 import { ConfigStore, IMPORT_EXTENSIONS, Library, type StoredEntry } from "./library";
 import { optimizedCopies, optimizedName, VideoOptimizer } from "./optimize";
@@ -205,7 +205,7 @@ async function startHost(): Promise<HostState> {
     const { conn, hello } = await connectOrSpawn(socket, hostBinary(), logFile);
     const caps = await conn.request<{
       gpu: { name: string; backend: string };
-      presentation: { compositor: string | null };
+      presentation: { compositor: string | null; plasma_desktop?: boolean };
       paused: boolean;
     }>("capabilities");
     host = conn;
@@ -221,6 +221,7 @@ async function startHost(): Promise<HostState> {
       gpu: `${caps.gpu.name} (${caps.gpu.backend})`,
       compositor: caps.presentation.compositor,
       paused: caps.paused,
+      plasmaDesktop: caps.presentation.plasma_desktop ?? false,
     });
     await sendHostSettings();
     await restoreAssignments();
@@ -428,6 +429,25 @@ function registerIpc(): void {
     const names = output ? [output] : (await rawOutputs()).map((o) => o.name);
     for (const name of names) config.config.assignments[name] = id;
     config.save();
+  });
+  ipcMain.handle("host:plasma-desktop", async (_e, showRinka?: boolean): Promise<PlasmaDesktopState> => {
+    if (!host) throw new Error("The wallpaper host is not running.");
+    const state = await host.request<{
+      plugin: string;
+      desktops: { screen: number; plugin: string; geometry: [number, number, number, number] | null }[];
+      restart: "restarted" | "needed" | null;
+    }>("plasma_desktop", { show_rinka: showRinka });
+    const outputs = await rawOutputs().catch(() => []);
+    // Plasma and the host both report logical geometry.
+    const outputAt = (g: [number, number, number, number] | null) =>
+      g &&
+      outputs.find(
+        (o) => o.logical_position?.[0] === g[0] && o.logical_position?.[1] === g[1] && o.logical_size?.[0] === g[2] && o.logical_size?.[1] === g[3],
+      )?.name;
+    return {
+      desktops: state.desktops.map((d) => ({ output: outputAt(d.geometry) ?? null, plugin: d.plugin, showsRinka: d.plugin === state.plugin })),
+      restart: state.restart,
+    };
   });
   ipcMain.handle("host:unassign", async (_e, output: string | null) => {
     if (!host) throw new Error("The wallpaper host is not running.");

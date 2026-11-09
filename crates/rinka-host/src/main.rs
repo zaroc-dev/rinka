@@ -25,6 +25,8 @@ mod clock;
 mod control;
 #[cfg(target_os = "linux")]
 mod niri;
+#[cfg(target_os = "linux")]
+mod plasma;
 #[cfg(any(target_os = "linux", windows))]
 mod restore;
 #[cfg(any(target_os = "linux", windows))]
