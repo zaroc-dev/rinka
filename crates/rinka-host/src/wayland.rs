@@ -596,6 +596,8 @@ impl Host {
                     // one (a reload) continues its timeline.
                     let now = Instant::now();
                     let same = same_path(&w.project_dir, &prepared.dir);
+                    // A hidden surface's clocks wait for its next frame callback.
+                    let paused = paused || w.hidden;
                     if !same {
                         w.scene_clock = SceneClock::new(now, paused);
                     }
@@ -1052,9 +1054,12 @@ impl Host {
                     continue;
                 }
                 if looks_hidden && !w.hidden {
-                    // Its clock keeps running (scenes replay to the time);
-                    // only its sound stops.
-                    log::debug!("scene surface looks hidden; stopping its sound");
+                    // Stop its clock as a hidden video does. A running clock
+                    // made its videos, whose decoders block while nothing
+                    // draws, race through every missed frame on return.
+                    log::debug!("scene surface looks hidden; pausing its clock");
+                    w.scene_clock.pause(now);
+                    w.scene_videos.pause(now);
                     w.hidden = true;
                     sound_changed = true;
                 }
@@ -1254,9 +1259,12 @@ impl Host {
                         p.resume(now);
                     }
                 }
+                // Hidden ones resume with their next frame callback.
                 for w in self.outputs.iter_mut().filter_map(|s| s.wallpaper.as_mut()) {
-                    w.scene_clock.resume(now);
-                    w.scene_videos.resume(now);
+                    if !w.hidden {
+                        w.scene_clock.resume(now);
+                        w.scene_videos.resume(now);
+                    }
                 }
                 self.sync_sound();
                 self.ensure_video_timer();
@@ -1494,11 +1502,13 @@ impl CompositorHandler for Host {
             .expect("found wallpaper");
         w.frame_pending = None;
         let was_hidden = std::mem::take(&mut w.hidden);
-        if was_hidden
-            && !paused
-            && let Some(p) = &mut w.player
-        {
-            p.resume(Instant::now());
+        if was_hidden && !paused {
+            let now = Instant::now();
+            if let Some(p) = &mut w.player {
+                p.resume(now);
+            }
+            w.scene_clock.resume(now);
+            w.scene_videos.resume(now);
         }
         let has_frame =
             w.video_frame.is_some() || w.next_frame.is_some_and(|due| due <= Instant::now());

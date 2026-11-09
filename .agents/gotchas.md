@@ -151,6 +151,10 @@ something costs more than a few minutes.
   overview backdrop surface while the overview is closed, and a second FIFO
   present there blocked the event loop for 774 ms. Backdrop surfaces present
   with Mailbox or Immediate.
+- **Hidden clocks must stop.** A scene's clock once kept running while its
+  surface was hidden (a fullscreen game). Its videos' decoders block on the
+  bounded queue meanwhile, so on return they raced through every missed frame
+  to catch up. Pause the scene clock and scene videos with the surface.
 - **Particle time must not go back.** Rendering a scene at an earlier time
   replays its particle systems from the start. Draw a backdrop still at the
   wallpaper's own frame time or later.
