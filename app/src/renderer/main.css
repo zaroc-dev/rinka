@@ -1041,6 +1041,21 @@ h1 {
   color: var(--muted);
   font-size: var(--text-sm);
 }
+.notice-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  color: var(--text);
+}
+.notice-action .button {
+  flex: none;
+}
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
 .sheet-preview {
   position: relative;
   margin: 4px 0 18px;

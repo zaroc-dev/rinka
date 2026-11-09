@@ -24,6 +24,8 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 [target.'cfg(target_os = "linux")'.dependencies]
 smithay-client-toolkit = { version = "0.21", default-features = false, features = ["calloop"] }
 wayland-backend = { version = "0.3", features = ["client_system"] }
+# KDE Plasma: KWin scripting and plasmashell are only reachable over D-Bus.
+zbus = { version = "5", default-features = false, features = ["blocking-api", "async-io"] }
 
 [target.'cfg(any(target_os = "linux", windows))'.dependencies]
 # The same software decoder on both hosts; RGB conversion stays in the engine.

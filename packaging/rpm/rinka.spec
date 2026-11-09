@@ -50,6 +50,10 @@ install -Dm644 %{rinka_root}/assets/rinka.svg \
   %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/rinka.svg
 install -Dm644 %{rinka_root}/packaging/rinka-host.service \
   %{buildroot}%{_userunitdir}/rinka-host.service
+# KDE Plasma's "Rinka" wallpaper type: makes Plasma's desktop show Rinka.
+install -d %{buildroot}%{_datadir}/plasma/wallpapers
+cp -a %{rinka_root}/crates/rinka-host/plasma/wallpaper \
+  %{buildroot}%{_datadir}/plasma/wallpapers/dev.rinka.wallpaper
 install -Dm644 %{rinka_root}/LICENSE %{buildroot}%{_licensedir}/rinka/LICENSE
 
 %files
@@ -62,3 +66,4 @@ install -Dm644 %{rinka_root}/LICENSE %{buildroot}%{_licensedir}/rinka/LICENSE
 %{_datadir}/applications/rinka.desktop
 %{_datadir}/icons/hicolor/scalable/apps/rinka.svg
 %{_userunitdir}/rinka-host.service
+%{_datadir}/plasma/wallpapers/dev.rinka.wallpaper/

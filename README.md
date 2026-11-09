@@ -31,7 +31,8 @@ Rinka is early. See [what works and what's next](#status).
 ## Install
 
 You need a Wayland compositor with wlr-layer-shell (Niri and Hyprland are the
-tested targets) and a Vulkan-capable GPU. Releases are listed on the
+main targets; KDE Plasma works with one setting, see below) and a
+Vulkan-capable GPU. Releases are listed on the
 [releases page](https://github.com/zaroc-dev/rinka/releases).
 
 ### Nix
@@ -100,6 +101,17 @@ layer-rule {
 }
 ```
 
+### KDE Plasma
+
+Plasma draws its own wallpaper above Rinka's. Choose **Show Rinka on the
+desktop** in Rinka's settings (or pick the **Rinka** wallpaper type in
+Plasma's desktop settings): Plasma's desktop turns transparent, so Rinka's
+wallpaper shows under your icons, widgets and panels. Plasma restarts once
+to apply it. **Use Plasma's wallpaper again** switches back.
+
+On Plasma, wallpapers under a fullscreen window keep playing, and the
+overview shows a plain background. Details: [KDE Plasma](docs/kde-plasma.md).
+
 ### Yuki wallpaper colors
 
 With [Yuki](https://github.com/zaroc-dev/yuki)'s Rinka integration, the shell
@@ -132,6 +144,7 @@ regenerate the theme. The file contract and measured checks are in
 | Area | State |
 | --- | --- |
 | Solid colors, images, video (FFmpeg) | Works on Niri; Hyprland expected, not yet tested |
+| KDE Plasma | Works with the Rinka wallpaper type, tested on a headless Plasma 6.8 |
 | Scene import: image layers, transforms, effect shaders | Works; 264 of 277 effect shaders translate |
 | Particles, solid and composition layers, multi-buffer effects | Next, in the order measured scenes need them |
 | Text, sound, SceneScript, 3D | Planned |

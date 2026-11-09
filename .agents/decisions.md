@@ -11,7 +11,7 @@ reason here in the same change.
 | License GPL-3.0-or-later | The developer's choice; switching to `-only` is a one-line change if wanted. |
 | Public repository, GitHub Pages site from `site/` | Shareable project page without a separate host. |
 | Build order: colors → images → FFmpeg video → Wallpaper Engine scenes + editor | Useful wallpaper playback before reverse engineering; each step lays the foundation for the next. |
-| Primary desktops Niri and Hyprland; Windows designed in from the start | The developer's desktop; Windows is the other big Wallpaper Engine audience. COSMIC and KDE follow with their own checks. GNOME has no layer-shell. |
+| Primary desktops Niri and Hyprland; Windows designed in from the start | The developer's desktop; Windows is the other big Wallpaper Engine audience. KDE Plasma followed (2026-11-09, `docs/kde-plasma.md`); COSMIC follows with its own checks. GNOME has no layer-shell. |
 | Unsupported features are reported, never silently dropped | The reason the project exists: other implementations load scenes but render them wrong. |
 
 ## Architecture
@@ -25,6 +25,9 @@ reason here in the same change.
 | Detached `rinka-host` process with JSON-lines over a Unix socket (Linux) or local named pipe (Windows) | Wallpapers survive the editor; both transports share the v1 protocol; frames never cross IPC. |
 | Host also is the CLI for import and thumbnails | Native decoders (FFmpeg, full-size images, pkg/tex) in one place; the editor spawns it with JSON jobs. |
 | Background layer-shell surface per output, one composed surface per monitor | Compositor stacking is not a layering mechanism; the engine composes. |
+| Plasma: a transparent wallpaper plugin plus a KWin script, not a Plasma plugin that draws | Plasma's desktop window covers background layer surfaces. Making it transparent keeps one renderer and no frames over IPC, and icons, widgets and panels stay Plasma's. The script is loaded only while the host runs, so KWin needs no installed or enabled script. |
+| Switching Plasma to the plugin restarts plasmashell (systemd unit only) | A desktop window created opaque stays opaque to KWin (Qt's opaque region), so a live switch shows black. Restarting only when systemd runs the shell avoids starting a second one; otherwise the user is told to log out. The previous plugin is stored in Plasma's own containment config, so the host keeps no Plasma state. |
+| zbus (blocking) for D-Bus in the host | KWin scripting and plasmashell are only reachable over D-Bus; `qdbus`/`dbus-send` are not installed everywhere (Fedora's dbus-broker). |
 | niri overview backdrop: a separate blurred, dimmed still, refreshed when the overview opens | niri shows backdrop surfaces only through a user layer rule, so the wallpaper itself cannot be both. A still costs one small draw per change; tracking every video frame would double the work for something visible only in the overview. |
 | Output assignments live in `~/.config/rinka/config.json`, not in projects | Projects stay portable; `serve --restore` reads the same file. |
 | Releases from version tags: Fedora RPM, Windows NSIS installer + zip, Nix `stable` branch | The RPM is built on the Fedora release whose FFmpeg matches nixpkgs, so its soname requirements are real; `stable` is fast-forwarded by CI so flake users follow releases with `nix flake update`. |
