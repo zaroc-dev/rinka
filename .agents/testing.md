@@ -148,6 +148,37 @@ preview's real pixels.
 Scene frame rate: run the host with `RUST_LOG=rinka_host=debug` and count
 `presented` lines over a few seconds.
 
+### KDE Plasma
+
+Run Plasma headless with its own home, data and session bus, so neither the
+user's session nor their config changes:
+
+```sh
+export HOME=/tmp/kdetest/home XDG_CONFIG_HOME=/tmp/kdetest/config \
+  XDG_DATA_HOME=/tmp/kdetest/data XDG_CACHE_HOME=/tmp/kdetest/cache \
+  XDG_STATE_HOME=/tmp/kdetest/state XDG_CURRENT_DESKTOP=KDE \
+  KWIN_SCREENSHOT_NO_PERMISSION_CHECKS=1 QT_FORCE_STDERR_LOGGING=1
+unset NIRI_SOCKET
+dbus-run-session -- sh -c 'echo $DBUS_SESSION_BUS_ADDRESS > /tmp/kdetest/bus;
+  exec /run/current-system/sw/bin/kwin_wayland --virtual --no-lockscreen \
+  --socket wayland-kde --width 1280 --height 720 plasmashell'
+```
+
+Then, with the same variables, `WAYLAND_DISPLAY=wayland-kde` and
+`DBUS_SESSION_BUS_ADDRESS=$(cat /tmp/kdetest/bus)`: run the host with its own
+socket, screenshot with `spectacle -b -n -f -o out.png`, switch plugins with
+`qdbus org.kde.plasmashell /PlasmaShell org.kde.PlasmaShell.evaluateScript
+'…'`, and print KWin's stacking order by loading a script that prints
+`workspace.stackingOrder` (`qdbus org.kde.KWin /Scripting
+org.kde.kwin.Scripting.loadScript FILE NAME`, then `run` on
+`/Scripting/Script<id>`; output lands in KWin's stderr). `--output-count 2`
+adds an output; `kscreen-doctor output.Virtual-0.scale.1.5` sets a
+fractional scale. There is no systemd on that bus, so `plasma_desktop`
+answers `restart: "needed"`; restart plasmashell by hand. Afterwards stop
+every process whose environment has the test `XDG_CONFIG_HOME` and check
+`loginctl show-session <id> -p LockedHint` on the real session (see
+gotchas).
+
 ## Sound
 
 Do not play test sound through the user's speakers. Route it to a

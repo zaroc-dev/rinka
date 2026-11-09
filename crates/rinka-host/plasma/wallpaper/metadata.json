@@ -1,0 +1,18 @@
+{
+    "KPlugin": {
+        "Authors": [
+            {
+                "Name": "Rinka"
+            }
+        ],
+        "Description": "Shows the wallpaper Rinka draws on this display",
+        "Icon": "preferences-desktop-wallpaper",
+        "Id": "dev.rinka.wallpaper",
+        "License": "GPL-3.0-or-later",
+        "Name": "Rinka",
+        "Version": "1",
+        "Website": "https://github.com/zaroc-dev/rinka"
+    },
+    "KPackageStructure": "Plasma/Wallpaper",
+    "X-Plasma-API-Minimum-Version": "6.0"
+}
