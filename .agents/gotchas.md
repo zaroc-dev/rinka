@@ -7,9 +7,14 @@ something costs more than a few minutes.
 
 - **rustup toolchains don't run.** An old toolchain pointed at a
   garbage-collected glibc. Use the flake dev shell (rust-overlay) for
-  everything; add tools to `flake.nix`.
+  everything; add tools to the dev shell in `nix/modules/dev.nix`.
 - **Flakes only see git-tracked files.** `nix build` silently misses new,
   unstaged files. `git add` first.
+- **`--override-input rinka path:…` copies untracked files.** A `path:`
+  input takes the whole checkout, `app/node_modules` and `app/dist` included,
+  so the `app` source and every package built from it change. To check that a
+  consumer (`~/dotfiles`) evaluates the same against a branch, use
+  `git+file://$HOME/source/rinka`, which sees only tracked files.
 - **Electron comes from nixpkgs.** The npm `electron` package is only for
   types (`ELECTRON_SKIP_BINARY_DOWNLOAD=1`). pnpm needs `allowBuilds` in
   `app/pnpm-workspace.yaml` (esbuild yes, electron no) or `pnpm install`
@@ -29,7 +34,7 @@ something costs more than a few minutes.
   the flake builds `wasm-bindgen-cli` at the version in `Cargo.lock`, not
   nixpkgs' copy: a consumer flake with `inputs.nixpkgs.follows` would bring a
   different CLI and fail with "schema version" mismatch. When bumping the
-  crate, update the two hashes in `flake.nix` (set them to `lib.fakeHash`,
+  crate, update the two hashes in `nix/_lib.nix` (set them to `lib.fakeHash`,
   build, copy the reported hash).
 
 ## Editor
@@ -170,7 +175,8 @@ something costs more than a few minutes.
 - **Optional-value path flags.** clap's `PathBuf` parser rejects an empty
   `default_missing_value = ""`, so bare `serve --restore` failed at login
   with "a value is required". Use `Option<Option<PathBuf>>` and keep a parse
-  test for the bare form the home-manager module uses.
+  test for the bare form: the NixOS and home-manager modules both start the
+  host with it.
 
 ## KDE Plasma
 

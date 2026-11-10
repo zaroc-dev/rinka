@@ -28,6 +28,19 @@ flowchart TD
 (context bridge `window.rinka`), `src/renderer` (Preact UI, preview, decode
 worker, WebCodecs player), `src/shared/api.ts` (types shared across processes).
 
+## Nix flake
+
+`flake.nix` only calls flake-parts with `import-tree ./nix/modules`, so every
+`.nix` file under `nix/modules` is a flake-parts module: `systems.nix`,
+`packages.nix` (packages, `overlays.default`, the rust-overlay `pkgs`),
+`dev.nix` (dev shell, formatter), `nixos.nix` (`nixosModules.rinka`) and
+`home.nix` (`homeModules.rinka`, plus the older `homeManagerModules.default`).
+Code shared by modules lives in `nix/_lib.nix` (toolchain, runtime libraries,
+package derivations); keep helpers out of `nix/modules`, or under a path with
+a `_` component, since import-tree loads everything else there. Both service
+modules default `package` to this flake's own build, because it needs
+rust-overlay, which a consumer's `pkgs` usually lacks.
+
 ## Project format
 
 A project is a directory with `project.json` and its assets:

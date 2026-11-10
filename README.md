@@ -51,18 +51,40 @@ The editor starts the wallpaper host on its own. To have wallpapers come back
 after a reboot, run the host at login with `--restore`, which reads the
 assignments you made in the editor.
 
-**Home Manager**
+The flake provides `packages.${system}.{rinka,rinka-host}` (`default` is
+`rinka`), `overlays.default`, `nixosModules.rinka` and `homeModules.rinka`.
+Both modules install Rinka and run the host as a systemd user service in
+graphical sessions; `services.rinka.desktops` limits it to the sessions whose
+`XDG_CURRENT_DESKTOP` is in the list.
 
 ```nix
 # flake.nix
 inputs.rinka.url = "github:zaroc-dev/rinka/stable";
+```
 
+**NixOS**
+
+```nix
+# configuration.nix
+imports = [ inputs.rinka.nixosModules.rinka ];
+services.rinka = {
+  enable = true;
+  desktops = [ "niri" ];
+};
+```
+
+**Home Manager**
+
+```nix
 # home.nix
-imports = [ inputs.rinka.homeManagerModules.default ];
+imports = [ inputs.rinka.homeModules.rinka ];
 services.rinka.enable = true;
 ```
 
-**Without Home Manager**, add `inputs.rinka.packages.${system}.default` (or
+`homeManagerModules.default` still works as an older name for
+`homeModules.rinka`.
+
+**Without a module**, add `inputs.rinka.packages.${system}.default` (or
 `overlays.default`) to your packages and start the host with your compositor,
 for example in Niri:
 

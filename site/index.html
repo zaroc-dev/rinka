@@ -305,16 +305,24 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 28px; justify-content: s
       <p class="soft">Opens the editor, which starts the wallpaper host. <code>stable</code> is the latest release; leave it off for the development branch.</p>
       <div class="code"><pre><code>nix run github:zaroc-dev/rinka/stable</code></pre><button class="copy" type="button">Copy</button></div>
 
-      <h3>Keep it, with Home Manager</h3>
-      <p class="soft">The host starts at login and brings back the wallpapers you picked. <code>nix flake update</code> moves you to the next release.</p>
+      <h3>Keep it, on NixOS</h3>
+      <p class="soft">The host starts at login and brings back the wallpapers you picked. <code>nix flake update</code> moves you to the next release. <code>desktops</code> is optional and limits the host to those sessions.</p>
       <div class="code"><pre><code><span class="c"># flake.nix</span>
 inputs.rinka.url = "github:zaroc-dev/rinka/stable";
 
-<span class="c"># home.nix</span>
-imports = [ inputs.rinka.homeManagerModules.default ];
+<span class="c"># configuration.nix</span>
+imports = [ inputs.rinka.nixosModules.rinka ];
+services.rinka = {
+  enable = true;
+  desktops = [ "niri" ];
+};</code></pre><button class="copy" type="button">Copy</button></div>
+
+      <h3>Or with Home Manager</h3>
+      <p class="soft">The same service, per user.</p>
+      <div class="code"><pre><code>imports = [ inputs.rinka.homeModules.rinka ];
 services.rinka.enable = true;</code></pre><button class="copy" type="button">Copy</button></div>
 
-      <h3>Without Home Manager</h3>
+      <h3>Without a module</h3>
       <p class="soft">Add the package and start the host from your compositor, for example in Niri:</p>
       <div class="code"><pre><code>spawn-at-startup "rinka-host" "serve" "--restore"</code></pre><button class="copy" type="button">Copy</button></div>
 
