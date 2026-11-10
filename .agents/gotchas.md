@@ -15,6 +15,11 @@ something costs more than a few minutes.
   so the `app` source and every package built from it change. To check that a
   consumer (`~/dotfiles`) evaluates the same against a branch, use
   `git+file://$HOME/source/rinka`, which sees only tracked files.
+- **`HOME=… ` alone does not isolate a test.** This session sets
+  `XDG_CONFIG_HOME` and `XDG_STATE_HOME`, which win over `HOME`, so running
+  the modules' library seed script (or the host with `--restore`) under a
+  throwaway `HOME` wrote into the real `~/.config/rinka/projects`. Point all
+  three at the throwaway directory.
 - **Electron comes from nixpkgs.** The npm `electron` package is only for
   types (`ELECTRON_SKIP_BINARY_DOWNLOAD=1`). pnpm needs `allowBuilds` in
   `app/pnpm-workspace.yaml` (esbuild yes, electron no) or `pnpm install`
