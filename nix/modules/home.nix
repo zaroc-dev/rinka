@@ -1,5 +1,7 @@
 { self, lib, ... }:
 let
+  service = import ../_service.nix { inherit self lib; };
+
   # Runs the wallpaper host at login and restores the wallpapers chosen in the
   # editor.
   module =
@@ -15,22 +17,10 @@ let
     {
       options.services.rinka = {
         enable = lib.mkEnableOption "Rinka, the wallpaper engine";
-        package = lib.mkOption {
-          type = lib.types.package;
-          default = self.packages.${pkgs.stdenv.hostPlatform.system}.rinka;
-          description = "The Rinka package (editor and host).";
-        };
-        desktops = lib.mkOption {
-          type = lib.types.listOf lib.types.str;
-          default = [ ];
-          example = [ "niri" ];
-          description = ''
-            Start the host only in sessions whose XDG_CURRENT_DESKTOP is one of
-            these. Empty starts it in every graphical session.
-          '';
-        };
-      };
+      }
+      // service.options pkgs;
       config = lib.mkIf cfg.enable {
+        assertions = service.assertions cfg;
         home.packages = [ cfg.package ];
         systemd.user.services.rinka-host = {
           Unit = {
@@ -43,7 +33,8 @@ let
             );
           };
           Service = {
-            ExecStart = "${cfg.package}/bin/rinka-host serve --restore";
+            ExecStartPre = lib.mkIf (cfg.projects != { }) (service.execStartPre pkgs cfg);
+            ExecStart = service.execStart cfg;
             Restart = "on-failure";
           };
           Install.WantedBy = [ "graphical-session.target" ];

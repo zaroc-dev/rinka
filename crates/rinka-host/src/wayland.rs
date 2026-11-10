@@ -174,6 +174,7 @@ pub fn run(endpoint: PathBuf, saved: Saved) -> anyhow::Result<()> {
         video_timer: false,
         outputs: Vec::new(),
         assignments: saved.assignments,
+        fallback: saved.fallback,
         audio: Audio::new(saved.settings.sound_gain()),
         settings: saved.settings,
         paused: false,
@@ -264,6 +265,9 @@ struct Host {
     /// Desired output name -> project directory. Survives disconnection, so a
     /// reconnected output gets its wallpaper back.
     assignments: HashMap<String, PathBuf>,
+    /// Project for outputs that appear without an assignment; it becomes
+    /// their assignment once it loads.
+    fallback: Option<PathBuf>,
     settings: HostSettings,
     audio: Audio,
     paused: bool,
@@ -1198,6 +1202,15 @@ impl Host {
         })
     }
 
+    /// The project an output that just appeared should show, and whether it
+    /// is the fallback rather than its own assignment.
+    fn restored_assignment(&self, name: &str) -> Option<(PathBuf, bool)> {
+        match self.assignments.get(name) {
+            Some(dir) => Some((dir.clone(), false)),
+            None => self.fallback.clone().map(|dir| (dir, true)),
+        }
+    }
+
     fn handle(&mut self, request: Request) -> Reply {
         match request {
             Request::Hello { .. } => unreachable!("handled by the control thread"),
@@ -1570,9 +1583,14 @@ impl OutputHandler for Host {
             wl,
             wallpaper: None,
         });
-        if let Some(dir) = self.assignments.get(&name).cloned() {
+        if let Some((dir, fallback)) = self.restored_assignment(&name) {
             match self.prepare(&dir) {
-                Ok(prepared) => self.apply_assignment(self.outputs.len() - 1, Some(prepared)),
+                Ok(prepared) => {
+                    if fallback {
+                        self.assignments.insert(name, dir);
+                    }
+                    self.apply_assignment(self.outputs.len() - 1, Some(prepared))
+                }
                 Err(e) => log::error!("restoring wallpaper on {name}: {}", e.message),
             }
         }

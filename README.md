@@ -84,6 +84,26 @@ services.rinka.enable = true;
 `homeManagerModules.default` still works as an older name for
 `homeModules.rinka`.
 
+**Starting library and default wallpaper.** Both modules can add projects to
+each user's library and show one of them on every output that has no
+wallpaper assigned in the editor:
+
+```nix
+services.rinka = {
+  projects = inputs.rinka.lib.imageProjects pkgs ./wallpapers // {
+    moonlight = ./rinka/moonlight; # a project directory with project.json
+  };
+  fallback = "moonlight";
+};
+```
+
+Each project is copied into the library once, the first time the host starts
+after it is added. Edits made in the editor are kept, and a project deleted
+in the editor is not added back. `lib.imageProjects` makes one image project
+per PNG or JPEG in a folder, named after the file; `lib.imageProject pkgs {
+image = ./a.png; }` makes one. A scene you imported in the editor can be
+copied out of `~/.config/rinka/projects/<id>`.
+
 **Without a module**, add `inputs.rinka.packages.${system}.default` (or
 `overlays.default`) to your packages and start the host with your compositor,
 for example in Niri:

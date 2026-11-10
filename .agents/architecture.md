@@ -39,7 +39,13 @@ Code shared by modules lives in `nix/_lib.nix` (toolchain, runtime libraries,
 package derivations); keep helpers out of `nix/modules`, or under a path with
 a `_` component, since import-tree loads everything else there. Both service
 modules default `package` to this flake's own build, because it needs
-rust-overlay, which a consumer's `pkgs` usually lacks.
+rust-overlay, which a consumer's `pkgs` usually lacks. Their shared options
+and start commands are in `nix/_service.nix`: `services.rinka.projects` are
+copied into the library by an `ExecStartPre` script once per id (recorded in
+`$XDG_STATE_HOME/rinka/seeded`, so deleted projects stay deleted), under a
+UUID derived from the name (`lib.projectId`), since the editor accepts only
+UUID ids. `lib.imageProject`/`lib.imageProjects` (`nix/modules/lib.nix`) build
+image projects like the editor's import does.
 
 ## Project format
 
@@ -214,7 +220,11 @@ holds `{version: 1, assignments: {output: projectId}}`; the library is
   plasmashell and then restarts plasmashell once (see gotchas). See
   `docs/kde-plasma.md`.
 - `--restore [DIR]` reads the editor's `config.json` assignments and
-  `sceneFps` at start.
+  `sceneFps` at start. `--fallback ID` (needs `--restore`) shows that library
+  project on any output that appears without an assignment and records it as
+  that output's assignment, so `outputs` and the editor report it; a saved
+  assignment always wins, and a missing fallback project is a warning. The
+  Nix modules pass it for `services.rinka.fallback`.
 - Linux shell colors (`shell_colors.rs`): after a successful present, export
   a small engine-rendered still on assignment, reload or buffer-size change.
   Wait for video frames, including scene textures, then one second of content

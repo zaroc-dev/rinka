@@ -30,7 +30,16 @@ pub fn default_data_dir() -> anyhow::Result<PathBuf> {
 pub struct Saved {
     /// Output → project directory.
     pub assignments: HashMap<String, PathBuf>,
+    /// Shown on outputs without an assignment (`serve --fallback`).
+    pub fallback: Option<PathBuf>,
     pub settings: HostSettings,
+}
+
+/// A library project's directory, or None for an id that would leave the
+/// `projects` directory.
+pub fn project_dir(dir: &Path, id: &str) -> Option<PathBuf> {
+    (!id.is_empty() && !id.contains(['/', '\\']) && !id.starts_with('.'))
+        .then(|| dir.join("projects").join(id))
 }
 
 /// Reads the editor's `config.json`. A missing or unreadable file restores
@@ -69,9 +78,9 @@ pub fn saved(dir: &Path) -> Saved {
                 assignments: config
                     .assignments
                     .into_iter()
-                    .filter(|(_, id)| !id.contains(['/', '\\']) && !id.starts_with('.'))
-                    .map(|(output, id)| (output, dir.join("projects").join(id)))
+                    .filter_map(|(output, id)| Some((output, project_dir(dir, &id)?)))
                     .collect(),
+                fallback: None,
                 settings,
             }
         }
@@ -111,5 +120,17 @@ mod tests {
         assert_eq!(s.settings.video_decoder, VideoDecoder::Auto);
         assert_eq!(s.assignments.len(), 1);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn project_ids_stay_in_the_library() {
+        let dir = Path::new("/data");
+        assert_eq!(
+            project_dir(dir, "abc"),
+            Some(PathBuf::from("/data/projects/abc"))
+        );
+        for id in ["", "..", ".hidden", "a/b", "a\\b"] {
+            assert_eq!(project_dir(dir, id), None, "{id:?}");
+        }
     }
 }

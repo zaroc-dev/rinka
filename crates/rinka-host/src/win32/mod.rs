@@ -97,6 +97,7 @@ pub fn run(endpoint: PathBuf, saved: Saved) -> anyhow::Result<()> {
         rebuild_at: None,
         outputs: Vec::new(),
         assignments: saved.assignments,
+        fallback: saved.fallback,
         audio: Audio::new(saved.settings.sound_gain()),
         settings: saved.settings,
         paused: false,
@@ -187,6 +188,9 @@ struct Host {
     /// Desired output name -> project directory. Survives disconnection, so a
     /// reconnected monitor gets its wallpaper back.
     assignments: HashMap<String, PathBuf>,
+    /// Project for outputs that appear without an assignment; it becomes
+    /// their assignment once it loads.
+    fallback: Option<PathBuf>,
     settings: HostSettings,
     audio: Audio,
     paused: bool,
@@ -830,11 +834,14 @@ impl Host {
                         wallpaper: None,
                         covered: false,
                     });
-                    if let Some(dir) = self.assignments.get(&name).cloned() {
+                    if let Some((dir, fallback)) = self.restored_assignment(&name) {
                         let index = self.outputs.len() - 1;
-                        let result = self
-                            .prepare(&dir)
-                            .and_then(|prepared| self.apply_assignment(index, Some(prepared)));
+                        let result = self.prepare(&dir).and_then(|prepared| {
+                            if fallback {
+                                self.assignments.insert(name.clone(), dir);
+                            }
+                            self.apply_assignment(index, Some(prepared))
+                        });
                         if let Err(e) = result {
                             log::error!("restoring wallpaper on {name}: {}", e.message);
                         }
@@ -857,6 +864,15 @@ impl Host {
             if let Err(e) = self.draw(index) {
                 log::error!("{}: {}", self.outputs[index].monitor.name, e.message);
             }
+        }
+    }
+
+    /// The project an output that just appeared should show, and whether it
+    /// is the fallback rather than its own assignment.
+    fn restored_assignment(&self, name: &str) -> Option<(PathBuf, bool)> {
+        match self.assignments.get(name) {
+            Some(dir) => Some((dir.clone(), false)),
+            None => self.fallback.clone().map(|dir| (dir, true)),
         }
     }
 
