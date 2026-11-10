@@ -69,6 +69,11 @@ enum Cmd {
         /// parser, so the bare flag is modelled as `Some(None)`.
         #[arg(long, num_args = 0..=1)]
         restore: Option<Option<PathBuf>>,
+        /// Show this library project (an id under the restored data
+        /// directory's `projects/`) on outputs the editor has not assigned,
+        /// e.g. a default wallpaper set by a NixOS or home-manager module.
+        #[arg(long, requires = "restore", value_name = "ID")]
+        fallback: Option<String>,
     },
     /// Show a project in a desktop window.
     Preview {
@@ -156,7 +161,11 @@ fn main() -> anyhow::Result<()> {
         .format_timestamp_millis()
         .init();
     match Cli::parse().command {
-        Cmd::Serve { socket, restore } => serve(socket, restore),
+        Cmd::Serve {
+            socket,
+            restore,
+            fallback,
+        } => serve(socket, restore, fallback),
         Cmd::Preview { project, color } => {
             let loaded = match (project, color) {
                 (Some(dir), _) => load_with_image(&dir)?,
@@ -246,7 +255,11 @@ fn load_with_image(dir: &std::path::Path) -> anyhow::Result<preview::Loaded> {
 }
 
 #[cfg(any(target_os = "linux", windows))]
-fn serve(endpoint: Option<PathBuf>, restore: Option<Option<PathBuf>>) -> anyhow::Result<()> {
+fn serve(
+    endpoint: Option<PathBuf>,
+    restore: Option<Option<PathBuf>>,
+    fallback: Option<String>,
+) -> anyhow::Result<()> {
     let endpoint = match endpoint {
         Some(e) => e,
         None => control::default_endpoint()?,
@@ -258,14 +271,35 @@ fn serve(endpoint: Option<PathBuf>, restore: Option<Option<PathBuf>>) -> anyhow:
                 Some(dir) => dir,
                 None => restore::default_data_dir()?,
             };
-            restore::saved(&dir)
+            let fallback = match fallback {
+                Some(id) => {
+                    let project = restore::project_dir(&dir, &id)
+                        .with_context(|| format!("--fallback {id:?} is not a project id"))?;
+                    // Deleting the default wallpaper in the editor is a
+                    // choice, not a fault.
+                    let found = project.join("project.json").is_file();
+                    if !found {
+                        log::warn!("fallback {} not found; ignored", project.display());
+                    }
+                    found.then_some(project)
+                }
+                None => None,
+            };
+            restore::Saved {
+                fallback,
+                ..restore::saved(&dir)
+            }
         }
     };
     desktop::run(endpoint, saved)
 }
 
 #[cfg(not(any(target_os = "linux", windows)))]
-fn serve(_endpoint: Option<PathBuf>, _restore: Option<Option<PathBuf>>) -> anyhow::Result<()> {
+fn serve(
+    _endpoint: Option<PathBuf>,
+    _restore: Option<Option<PathBuf>>,
+    _fallback: Option<String>,
+) -> anyhow::Result<()> {
     anyhow::bail!("wallpaper presentation is not implemented on this platform yet; use `preview`")
 }
 
@@ -372,8 +406,13 @@ mod tests {
     #[test]
     fn restore_flag_forms() {
         assert_eq!(restore(&[]), None);
-        // The form the home-manager module and README use.
+        // The form the NixOS and home-manager modules and the README use.
         assert_eq!(restore(&["--restore"]), Some(None));
+        assert_eq!(
+            restore(&["--restore", "--fallback", "id"]),
+            Some(None),
+            "the modules' form with a default wallpaper"
+        );
         assert_eq!(
             restore(&["--restore", "/data"]),
             Some(Some(PathBuf::from("/data")))
@@ -383,5 +422,15 @@ mod tests {
             Some(None),
             "a following flag is not taken as the directory"
         );
+    }
+
+    #[test]
+    fn fallback_needs_restore() {
+        let parse = |args: &[&str]| Cli::try_parse_from(["rinka-host", "serve"].iter().chain(args));
+        assert!(parse(&["--fallback", "id"]).is_err());
+        match parse(&["--fallback", "id", "--restore"]).unwrap().command {
+            Cmd::Serve { fallback, .. } => assert_eq!(fallback.as_deref(), Some("id")),
+            _ => unreachable!(),
+        }
     }
 }

@@ -94,8 +94,8 @@ pluggable renderer backends.
 
 - **Environment.** NixOS. Use the flake dev shell: `nix develop` (or
   `nix develop -c <cmd>`). Do not install toolchains globally; add missing
-  tools to `flake.nix`. Flakes only see git-tracked files: `git add` new
-  files before `nix build`.
+  tools to `nix/modules/dev.nix`. Flakes only see git-tracked files:
+  `git add` new files before `nix build`.
 - **Build and test.**
   ```sh
   cargo test --workspace                 # GPU readback tests need a GPU

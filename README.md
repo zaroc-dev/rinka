@@ -51,18 +51,60 @@ The editor starts the wallpaper host on its own. To have wallpapers come back
 after a reboot, run the host at login with `--restore`, which reads the
 assignments you made in the editor.
 
-**Home Manager**
+The flake provides `packages.${system}.{rinka,rinka-host}` (`default` is
+`rinka`), `overlays.default`, `nixosModules.rinka` and `homeModules.rinka`.
+Both modules install Rinka and run the host as a systemd user service in
+graphical sessions; `services.rinka.desktops` limits it to the sessions whose
+`XDG_CURRENT_DESKTOP` is in the list.
 
 ```nix
 # flake.nix
 inputs.rinka.url = "github:zaroc-dev/rinka/stable";
+```
 
+**NixOS**
+
+```nix
+# configuration.nix
+imports = [ inputs.rinka.nixosModules.rinka ];
+services.rinka = {
+  enable = true;
+  desktops = [ "niri" ];
+};
+```
+
+**Home Manager**
+
+```nix
 # home.nix
-imports = [ inputs.rinka.homeManagerModules.default ];
+imports = [ inputs.rinka.homeModules.rinka ];
 services.rinka.enable = true;
 ```
 
-**Without Home Manager**, add `inputs.rinka.packages.${system}.default` (or
+`homeManagerModules.default` still works as an older name for
+`homeModules.rinka`.
+
+**Starting library and default wallpaper.** Both modules can add projects to
+each user's library and show one of them on every output that has no
+wallpaper assigned in the editor:
+
+```nix
+services.rinka = {
+  projects = inputs.rinka.lib.imageProjects pkgs ./wallpapers // {
+    moonlight = ./rinka/moonlight; # a project directory with project.json
+  };
+  fallback = "moonlight";
+};
+```
+
+Each project is copied into the library once, the first time the host starts
+after it is added. Edits made in the editor are kept, and a project deleted
+in the editor is not added back. `lib.imageProjects` makes one image project
+per PNG or JPEG in a folder, named after the file; `lib.imageProject pkgs {
+image = ./a.png; }` makes one. A scene you imported in the editor can be
+copied out of `~/.config/rinka/projects/<id>`.
+
+**Without a module**, add `inputs.rinka.packages.${system}.default` (or
 `overlays.default`) to your packages and start the host with your compositor,
 for example in Niri:
 
