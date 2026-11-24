@@ -42,6 +42,7 @@ const api: RinkaApi = {
     ipcRenderer.on("host:state", (_event, state: HostState) => listener(state));
   },
   setPaused: (paused) => ipcRenderer.invoke("host:pause", paused),
+  plasmaDesktop: (showRinka) => ipcRenderer.invoke("host:plasma-desktop", showRinka),
 
   reportPreview: (report) => ipcRenderer.send("preview:report", report),
 };

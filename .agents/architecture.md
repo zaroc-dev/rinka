@@ -192,6 +192,14 @@ holds `{version: 1, assignments: {output: projectId}}`; the library is
   and animated scenes, when niri's event stream (`niri.rs`, its own thread)
   reports the overview opening. It presents with Mailbox or Immediate (see
   gotchas).
+- Under Plasma (`XDG_CURRENT_DESKTOP` names KDE, `plasma.rs`) the host loads
+  a KWin script over D-Bus while it runs that raises Plasma's desktop
+  windows whenever a `rinka-host` window appears, so Rinka stays below the
+  desktop's icons. Plasma's desktop window only lets Rinka through with the
+  `dev.rinka.wallpaper` plugin (`crates/rinka-host/plasma/wallpaper`), which
+  makes it transparent; `plasma_desktop` switches desktops to it in
+  plasmashell and then restarts plasmashell once (see gotchas). See
+  `docs/kde-plasma.md`.
 - `--restore [DIR]` reads the editor's `config.json` assignments and
   `sceneFps` at start.
 - Linux shell colors (`shell_colors.rs`): after a successful present, export
@@ -247,7 +255,9 @@ video state, including each video's and scene video's `decoder`),
 `pause`, `resume`, `seek {output?, position}`, `settings {scene_fps?,
 volume?, muted?, video_decoder?}`
 (host-wide; returns the settings in effect, which `capabilities` also
-reports), `shutdown`. Defined in
+reports), `plasma_desktop {show_rinka?}` (Linux; plugin of each Plasma
+desktop with its screen geometry, and `restart`; answered off the event
+loop), `shutdown`. Defined in
 `crates/rinka-host/src/protocol.rs`. `pause` stops all animation, videos and
 scenes, and keeps the last frame; scene clocks (`clock.rs`) stand still and
 continue from there on `resume`. Assignments made while paused start paused.

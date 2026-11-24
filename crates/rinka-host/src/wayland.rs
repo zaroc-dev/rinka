@@ -117,6 +117,15 @@ pub fn run(endpoint: PathBuf, saved: Saved) -> anyhow::Result<()> {
         .handle()
         .insert_source(rx, |event, _, host: &mut Host| {
             if let channel::Event::Msg(cmd) = event {
+                if let Request::PlasmaDesktop { show_rinka } = cmd.request {
+                    // plasmashell can take a while to answer; keep the
+                    // wallpapers drawing meanwhile.
+                    let reply = cmd.reply;
+                    std::thread::spawn(move || {
+                        let _ = reply.send(crate::plasma::desktop(show_rinka));
+                    });
+                    return;
+                }
                 let shutdown = matches!(cmd.request, Request::Shutdown);
                 let reply = host.handle(cmd.request);
                 let _ = cmd.reply.send(reply);
@@ -180,8 +189,13 @@ pub fn run(endpoint: PathBuf, saved: Saved) -> anyhow::Result<()> {
 
     log::info!("control socket: {}", endpoint.display());
     control::serve(listener, move |cmd| tx.send(cmd).is_ok());
+    let kwin_script =
+        crate::plasma::session().then(|| crate::plasma::KeepBelowDesktop::load(&endpoint));
 
     let result = event_loop.run(None, &mut host, |_| {});
+    if let Some(script) = kwin_script {
+        script.unload();
+    }
     let _ = std::fs::remove_file(&endpoint);
     drop(host);
     result.context("event loop failed")
@@ -1302,6 +1316,7 @@ impl Host {
                 self.stop.stop();
                 Ok(Value::Null)
             }
+            Request::PlasmaDesktop { .. } => unreachable!("handled off the event loop"),
         }
     }
 
@@ -1345,6 +1360,9 @@ impl Host {
                 "visibility_pause": false,
                 // Shown only where a niri layer rule places it.
                 "overview_backdrop": self.backdrops,
+                // Plasma hides Rinka until its desktops use Rinka's plugin
+                // (`plasma_desktop`).
+                "plasma_desktop": crate::plasma::session(),
             },
             "paused": self.paused,
             "settings": self.settings,

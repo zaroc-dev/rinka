@@ -958,6 +958,10 @@ impl Host {
                 self.stop = true;
                 Ok(Value::Null)
             }
+            Request::PlasmaDesktop { .. } => Err(Error::new(
+                ErrorCode::Unavailable,
+                "KDE Plasma runs only on Linux",
+            )),
         }
     }
 

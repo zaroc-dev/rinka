@@ -172,6 +172,45 @@ something costs more than a few minutes.
   with "a value is required". Use `Option<Option<PathBuf>>` and keep a parse
   test for the bare form the home-manager module uses.
 
+## KDE Plasma
+
+- **Plasma's desktop is a layer surface above Rinka's.** Plasma 6 draws its
+  desktop on a background layer surface (namespace `desktop`) that KWin
+  stacks over Rinka's. The host presenting is not evidence of anything on
+  screen; check pixels.
+- **A transparent desktop window can still be opaque to KWin.** Qt sends an
+  opaque region once when the window is created with an opaque color and
+  never clears it, so a plugin that makes Plasma's window transparent works
+  when loaded at startup and shows black when chosen live. Hiding and
+  showing the window keeps the same `wl_surface` and region. Restart
+  plasmashell; check with `WAYLAND_DEBUG=1` for `set_opaque_region`.
+- **New surfaces can land above the desktop window.** KWin raises a new,
+  non-activated window to the top of its layer when the active window is in
+  another layer. The host's KWin script raises the desktop windows after
+  each `rinka-host` window appears.
+- **KWin gives covered surfaces frame callbacks.** Hidden detection (500 ms
+  without a callback) never fires under a fullscreen window on KWin.
+- **plasmashell scripts apply changes late.** `evaluateScript` changes
+  (wallpaper plugin) are applied when the script's wrappers are destroyed;
+  a second script right after can still read the old plugin. Writing a key
+  into a `Wallpaper` config group also pokes it into the *loaded* wallpaper's
+  live configuration.
+- **QML `console.log` from plasmashell may not reach stderr.** Draw a
+  visible marker in a test plugin instead of trusting logs.
+- **Nested KWin in a Nix shell.** `/run/wrappers/bin/kwin_wayland` (the
+  capability wrapper) exits silently; run
+  `/run/current-system/sw/bin/kwin_wayland`. Qt logs go to the journal
+  unless `QT_FORCE_STDERR_LOGGING=1`. Windowed mode needs the host
+  compositor's `wp_single_pixel_buffer_manager_v1`, which niri lacks; use
+  `--virtual`.
+- **A nested Plasma touches the real session.** Its screen locker set
+  `LockedHint=yes` on the real niri session (clear it with
+  `busctl call org.freedesktop.login1 /org/freedesktop/login1/session/_32
+  org.freedesktop.login1.Session SetLockedHint b false`); pass
+  `--no-lockscreen`. `dbus-run-session` leaves akonadi, kded and portals
+  running when KWin is killed; stop every process whose environment has the
+  test `XDG_CONFIG_HOME`.
+
 ## Windows host
 
 - **Every background host spawn needs `windowsHide: true`.** The host is a

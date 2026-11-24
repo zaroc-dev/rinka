@@ -133,9 +133,26 @@ export type HostState =
       compositor: string | null;
       /** Wallpaper animation is paused; the last frame stays on screen. */
       paused: boolean;
+      /** A KDE Plasma session: its desktop covers Rinka unless it uses Rinka's wallpaper plugin. */
+      plasmaDesktop: boolean;
     }
   | { state: "stopped" }
   | { state: "unavailable"; reason: string };
+
+/** One Plasma desktop (per screen and activity) and its wallpaper plugin. */
+export interface PlasmaDesktop {
+  /** The output it covers, matched by position and size; null when its screen is gone. */
+  output: string | null;
+  plugin: string;
+  /** Uses Rinka's plugin, so Rinka's wallpaper shows through. */
+  showsRinka: boolean;
+}
+
+export interface PlasmaDesktopState {
+  desktops: PlasmaDesktop[];
+  /** After switching to Rinka: "restarted" when Plasma was restarted, "needed" when the user has to. */
+  restart: "restarted" | "needed" | null;
+}
 
 export interface PreviewReport {
   ok: boolean;
@@ -320,6 +337,12 @@ export interface RinkaApi {
   onHostState(listener: (state: HostState) => void): void;
   /** Stops or continues wallpaper animation on every display. */
   setPaused(paused: boolean): Promise<HostState>;
+  /**
+   * KDE Plasma: reports which desktops show Rinka. `showRinka` true switches
+   * them all to Rinka's wallpaper plugin (Plasma restarts once), false back
+   * to the wallpaper they had.
+   */
+  plasmaDesktop(showRinka?: boolean): Promise<PlasmaDesktopState>;
 
   reportPreview(report: PreviewReport): void;
 }

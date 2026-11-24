@@ -87,6 +87,12 @@ Solid/video/gamma-scene seeds, edit/reassignment, fallback, crash/restart and
 shutdown verified on a nested Niri; physical multi-output hotplug and Hyprland
 remain unverified.
 
+KDE Plasma (2026-11-09, `docs/kde-plasma.md`): Rinka shows through Plasma's
+desktop with the `dev.rinka.wallpaper` plugin, stays below its icons with a
+KWin script, and the editor switches desktops to it. Measured on a headless
+Plasma 6.8.2; a real Plasma login, the systemd restart path, hidden pausing
+and the overview background are open.
+
 ## Next, in order
 
 1. **Wallpaper Engine user properties** (colors, sliders, toggles, combos,
@@ -110,6 +116,10 @@ scenes each.
 ## Open items
 
 - Hyprland: untested.
+- KDE Plasma: covered wallpapers keep playing (KWin sends frame callbacks
+  to covered surfaces; a KWin script could report coverage), the overview
+  shows a grey background, and a real Plasma login is untested
+  (`docs/kde-plasma.md`).
 - Fractional scaling, output reconnection and pausing on power-off: untested.
 - Windows: color/image/video/scene playback, named-pipe control, covered-monitor
   pausing and tray. Video uses the shared FFmpeg decoder; generated seek/loop,

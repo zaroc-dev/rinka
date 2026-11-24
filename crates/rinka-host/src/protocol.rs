@@ -59,6 +59,15 @@ pub enum Request {
         output: Option<String>,
         position: f64,
     },
+    /// KDE Plasma: reports the wallpaper plugin of each Plasma desktop.
+    /// `show_rinka` true switches every desktop to Rinka's plugin (which
+    /// makes Plasma's desktop transparent so Rinka shows), false restores
+    /// the plugins it replaced.
+    PlasmaDesktop {
+        // Windows answers without reading it.
+        #[cfg_attr(windows, allow(dead_code))]
+        show_rinka: Option<bool>,
+    },
     /// Stops the host and removes all wallpaper surfaces.
     Shutdown,
 }
@@ -88,6 +97,8 @@ pub enum ErrorCode {
     UnknownOutput,
     Project,
     Gpu,
+    /// The request needs something this platform or session lacks.
+    Unavailable,
 }
 
 pub type Reply = Result<Value, Error>;
@@ -160,6 +171,19 @@ mod tests {
             (patch.scene_fps, patch.volume, patch.muted),
             (Some(15), None, Some(true))
         );
+        let (_, req) = parse_line(r#"{"id":5,"cmd":"plasma_desktop","show_rinka":true}"#);
+        assert!(matches!(
+            req,
+            Ok(Request::PlasmaDesktop {
+                show_rinka: Some(true)
+            })
+        ));
+        let (_, req) = parse_line(r#"{"id":6,"cmd":"plasma_desktop"}"#);
+        assert!(matches!(
+            req,
+            Ok(Request::PlasmaDesktop { show_rinka: None })
+        ));
+
         let (_, req) = parse_line(r#"{"id":4,"cmd":"settings"}"#);
         assert!(matches!(req, Ok(Request::Settings { .. })));
 
